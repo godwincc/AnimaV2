@@ -100,10 +100,15 @@ public class CombatEngine
     private List<ICombatant> InitiativePhase()
     {
         // TODO: handle Providence-style "always acts first" override
-        // TODO: handle Speed ties via roll
+        //
+        // PvE tie-break (no PvP yet, so no need for a fairness-preserving roll): on equal
+        // Speed, the player's team always goes first; within a tied team, lower position
+        // (1 before 2 before 3) goes first. Fully deterministic — no randomness.
         return AllCombatants()
             .Where(c => c.CurrentHp > 0)
             .OrderByDescending(c => c.Speed)
+            .ThenBy(c => c is Enemy) // false (player) sorts before true (enemy)
+            .ThenBy(c => c.Position)
             .ToList();
     }
 
