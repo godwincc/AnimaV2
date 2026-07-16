@@ -113,7 +113,7 @@ public class CombatEngine
 
     private void ResolveEnemyTurn(Enemy enemy)
     {
-        var rule = enemy.BehaviorRules.FirstOrDefault(r => r.Condition(enemy, _state));
+        var rule = enemy.BehaviorRules.FirstOrDefault(r => (!enemy.IsEnraged || !r.IsDefensive) && r.Condition(enemy, _state));
         if (rule == null)
         {
             Log($"{enemy.DisplayName} has no valid action.");

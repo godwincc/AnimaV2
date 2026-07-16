@@ -125,13 +125,19 @@ public static class SampleEnemies
                 {
                     Condition = (enemy, state) => enemy.AiState.TryGetValue("IsCharging", out var v) && v is true,
                     Skill = chargingSlam,
-                    OnUsed = enemy => enemy.AiState["IsCharging"] = false,
+                    // Once Enraged, Guard Stance never fires again to re-arm this flag — so leave it
+                    // set once it's already true, letting full-aggro Charging Slam fire every round.
+                    OnUsed = enemy =>
+                    {
+                        if (!enemy.IsEnraged) enemy.AiState["IsCharging"] = false;
+                    },
                 },
                 new EnemyBehaviorRule
                 {
                     Condition = (enemy, state) => true, // fallback: wind up for next turn's Charging Slam
                     Skill = guardStance,
                     OnUsed = enemy => enemy.AiState["IsCharging"] = true,
+                    IsDefensive = true,
                 },
             },
         };
