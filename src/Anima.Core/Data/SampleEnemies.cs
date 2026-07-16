@@ -83,4 +83,87 @@ public static class SampleEnemies
             },
         };
     }
+
+    // Elite — telegraphs a big hit: Guard Stance (shield up) one turn, Charging Slam the next.
+    public static Enemy CreateSentinel()
+    {
+        var chargingSlam = new Skill
+        {
+            Name = "Charging Slam",
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 0,
+            BaseDamage = 55,
+        };
+
+        var guardStance = new Skill
+        {
+            Name = "Guard Stance",
+            Category = SkillCategory.Buff,
+            Range = AttackRange.NA,
+            Target = TargetType.SelfTarget,
+            EnergyCost = 0,
+            BaseShield = 20,
+            Duration = DurationType.UntilConsumed,
+        };
+
+        return new Enemy
+        {
+            Name = "The Sentinel",
+            MaxHp = 140,
+            Defense = 12,
+            CurrentHp = 140,
+            Position = 1,
+            Speed = 8,
+            BehaviorRules = new List<EnemyBehaviorRule>
+            {
+                new EnemyBehaviorRule
+                {
+                    Condition = (enemy, state) => enemy.AiState.TryGetValue("IsCharging", out var v) && v is true,
+                    Skill = chargingSlam,
+                    OnUsed = enemy => enemy.AiState["IsCharging"] = false,
+                },
+                new EnemyBehaviorRule
+                {
+                    Condition = (enemy, state) => true, // fallback: wind up for next turn's Charging Slam
+                    Skill = guardStance,
+                    OnUsed = enemy => enemy.AiState["IsCharging"] = true,
+                },
+            },
+        };
+    }
+
+    // Elite — sustains itself by healing off its own attacks.
+    public static Enemy CreateLeechMother()
+    {
+        var drainingClaw = new Skill
+        {
+            Name = "Draining Claw",
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 0,
+            BaseDamage = 20,
+            SelfHealPercentOfDamage = 0.5,
+        };
+
+        return new Enemy
+        {
+            Name = "Leech Mother",
+            MaxHp = 160,
+            Defense = 10,
+            CurrentHp = 160,
+            Position = 1,
+            Speed = 6,
+            BehaviorRules = new List<EnemyBehaviorRule>
+            {
+                new EnemyBehaviorRule
+                {
+                    Condition = (enemy, state) => true, // always attacks
+                    Skill = drainingClaw,
+                },
+            },
+        };
+    }
 }

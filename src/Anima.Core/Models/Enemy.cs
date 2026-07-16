@@ -21,4 +21,6 @@ public class EnemyBehaviorRule
 {
     public required Func<Enemy, CombatState, bool> Condition { get; set; }
     public required Skill Skill { get; set; }
+    // Fires after the skill resolves — used for AiState bookkeeping (e.g. Sentinel's charge telegraph).
+    public Action<Enemy>? OnUsed { get; set; }
 }
