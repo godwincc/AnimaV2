@@ -370,8 +370,11 @@ public class CombatEngine
         var alive = team.Where(c => c.CurrentHp > 0).ToList();
         return targetType switch
         {
+            // Marked overrides Taunt: it forces the *opposing* team's attacks specifically,
+            // taking priority over any Taunt held within the target team.
             TargetType.Enemy or TargetType.Ally =>
-                alive.FirstOrDefault(c => c.ActiveStatuses.Any(s => s.Keyword == "Taunt"))
+                alive.FirstOrDefault(c => c.ActiveStatuses.Any(s => s.Keyword == "Marked"))
+                    ?? alive.FirstOrDefault(c => c.ActiveStatuses.Any(s => s.Keyword == "Taunt"))
                     ?? alive.OrderBy(c => c.Position).FirstOrDefault(),
             TargetType.LowestHpEnemy or TargetType.LowestHpAlly => alive.OrderBy(c => c.CurrentHp).FirstOrDefault(),
             _ => alive.FirstOrDefault(),
