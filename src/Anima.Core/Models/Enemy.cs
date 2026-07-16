@@ -14,6 +14,11 @@ public class Enemy : ICombatant
     public required List<EnemyBehaviorRule> BehaviorRules { get; set; }
     public Dictionary<string, object> AiState { get; set; } = new();
 
+    // Universal Elite/Boss safety net — forces a fight to resolve instead of stalemating.
+    public int? EnrageRound { get; set; } // null = no enrage; otherwise the Round number it triggers on
+    public double EnrageDamageMultiplier { get; set; } = 1.75; // +75% default
+    public bool IsEnraged { get; set; } = false;
+
     public string DisplayName => Name;
 }
 

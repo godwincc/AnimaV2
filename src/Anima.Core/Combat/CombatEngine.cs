@@ -42,6 +42,16 @@ public class CombatEngine
         {
             TickStatusDurations(combatant);
         }
+
+        // Elite/Boss Enrage — universal safety net against stalemates.
+        foreach (var enemy in _state.EnemyTeam.Where(e => e.CurrentHp > 0))
+        {
+            if (enemy.EnrageRound.HasValue && !enemy.IsEnraged && _state.RoundNumber >= enemy.EnrageRound.Value)
+            {
+                enemy.IsEnraged = true;
+                Log($"{enemy.Name} becomes ENRAGED! Damage output increased.");
+            }
+        }
     }
 
     private IEnumerable<ICombatant> AllCombatants() =>
@@ -163,7 +173,8 @@ public class CombatEngine
             return;
         }
 
-        var raw = skill.BaseDamage * damageMultiplier;
+        var enrageMultiplier = actor is Enemy { IsEnraged: true } enragedEnemy ? enragedEnemy.EnrageDamageMultiplier : 1.0;
+        var raw = skill.BaseDamage * damageMultiplier * enrageMultiplier;
         var weak = GetStatus(actor, "Weak");
         if (weak != null)
         {
@@ -191,9 +202,10 @@ public class CombatEngine
         target.CurrentHp = Math.Max(0, target.CurrentHp - final);
 
         Log($"  Target: {target.DisplayName}");
+        var multLabel = enrageMultiplier > 1.0 ? $"{damageMultiplier:0.##} mult x {enrageMultiplier:0.##} enrage" : $"{damageMultiplier:0.##} mult";
         var mathLine = absorbed > 0
-            ? $"  Damage: {skill.BaseDamage} base x {damageMultiplier:0.##} mult = {rawInt} raw - {absorbed} shield = {remaining} - {target.Defense} def = {final} dealt"
-            : $"  Damage: {skill.BaseDamage} base x {damageMultiplier:0.##} mult = {rawInt} raw - {target.Defense} def = {final} dealt";
+            ? $"  Damage: {skill.BaseDamage} base x {multLabel} = {rawInt} raw - {absorbed} shield = {remaining} - {target.Defense} def = {final} dealt"
+            : $"  Damage: {skill.BaseDamage} base x {multLabel} = {rawInt} raw - {target.Defense} def = {final} dealt";
         Log(mathLine);
         Log($"  {target.DisplayName} HP: {target.CurrentHp}");
 

@@ -116,6 +116,9 @@ public static class SampleEnemies
             CurrentHp = 140,
             Position = 1,
             Speed = 8,
+            // Generous buffer past the round-15 target — only kicks in if the fight is genuinely
+            // dragging, not to interfere with the normal Guard Stance / Charging Slam telegraph.
+            EnrageRound = 18,
             BehaviorRules = new List<EnemyBehaviorRule>
             {
                 new EnemyBehaviorRule
