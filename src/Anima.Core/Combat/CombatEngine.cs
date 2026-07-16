@@ -396,6 +396,14 @@ public class CombatEngine
         {
             if (status.Duration != DurationType.FixedTurn) continue;
 
+            // Bleed is a DOT — applies its Magnitude directly to HP, bypassing Defense and
+            // Shield entirely, rather than going through the normal damage pipeline.
+            if (status.Keyword == "Bleed")
+            {
+                combatant.CurrentHp = Math.Max(0, combatant.CurrentHp - status.Magnitude);
+                Log($"  {combatant.DisplayName} bleeds for {status.Magnitude} ({combatant.DisplayName} HP: {combatant.CurrentHp}).");
+            }
+
             status.RemainingTurns--;
             if (status.RemainingTurns <= 0)
             {
