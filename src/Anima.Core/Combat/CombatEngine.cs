@@ -298,7 +298,27 @@ public class CombatEngine
         Log(mathLine);
         Log($"  {target.DisplayName} HP: {target.CurrentHp}");
 
+        PurgeDeadAnimaCards(target);
+
         return final;
+    }
+
+    // A dead Anima never takes another turn, so its cards would otherwise sit in Hand/DrawPile/
+    // DiscardPile forever — never played, never discarded, permanently eating into the shared
+    // hand cap. Removing them on death is a real gameplay rule, not just a test-harness fix.
+    private void PurgeDeadAnimaCards(ICombatant combatant)
+    {
+        if (combatant is not Anima anima || anima.CurrentHp > 0) return;
+
+        var deckSkills = anima.DeckSkills;
+        var removed = _state.Hand.RemoveAll(s => deckSkills.Contains(s))
+            + _state.DrawPile.RemoveAll(s => deckSkills.Contains(s))
+            + _state.DiscardPile.RemoveAll(s => deckSkills.Contains(s));
+
+        if (removed > 0)
+        {
+            Log($"  {anima.DisplayName} has fallen — their remaining cards are removed from the deck.");
+        }
     }
 
     // Retaliate/Thorns: flat counter-damage back at a Melee attacker, through the same
@@ -485,6 +505,7 @@ public class CombatEngine
             {
                 combatant.CurrentHp = Math.Max(0, combatant.CurrentHp - status.Magnitude);
                 Log($"  {combatant.DisplayName} bleeds for {status.Magnitude} ({combatant.DisplayName} HP: {combatant.CurrentHp}).");
+                PurgeDeadAnimaCards(combatant);
             }
 
             status.RemainingTurns--;
