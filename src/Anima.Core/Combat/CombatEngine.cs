@@ -128,6 +128,7 @@ public class CombatEngine
             _state.EnemyTeam.Cast<ICombatant>().ToList(),
             damageMultiplier: 1.0,
             spiritMultiplier: 1.0);
+        rule.OnUsed?.Invoke(enemy);
     }
 
     private void ResolveSkill(
