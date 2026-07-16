@@ -138,10 +138,14 @@ public class CombatEngine
         double damageMultiplier,
         double spiritMultiplier)
     {
+        // Weak is Until-Consumed (same pattern as Shield/Primed) — it persists on its target
+        // until that target's next skill use of any kind, regardless of Round/turn-order timing.
+        var weakMagnitude = ConsumeWeak(actor);
+
         switch (skill.Category)
         {
             case SkillCategory.Attack:
-                ResolveAttack(actor, skill, opposingTeam, friendlyTeam, damageMultiplier, spiritMultiplier);
+                ResolveAttack(actor, skill, opposingTeam, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude);
                 break;
             case SkillCategory.Move:
                 ResolveMove(actor, skill);
@@ -150,12 +154,22 @@ public class CombatEngine
                 ResolveBuff(actor, skill);
                 break;
             case SkillCategory.Heal:
-                ResolveHeal(actor, skill, friendlyTeam, spiritMultiplier);
+                ResolveHeal(actor, skill, friendlyTeam, spiritMultiplier, weakMagnitude);
                 break;
             default:
                 Log($"  ({skill.Category} skills aren't resolved yet.)");
                 break;
         }
+    }
+
+    private int ConsumeWeak(ICombatant actor)
+    {
+        var weak = GetStatus(actor, "Weak");
+        if (weak == null) return 0;
+
+        actor.ActiveStatuses.Remove(weak);
+        Log($"  {actor.DisplayName}'s Weak is consumed.");
+        return weak.Magnitude;
     }
 
     private void ResolveAttack(
@@ -164,7 +178,8 @@ public class CombatEngine
         List<ICombatant> opposingTeam,
         List<ICombatant> friendlyTeam,
         double damageMultiplier,
-        double spiritMultiplier)
+        double spiritMultiplier,
+        int weakMagnitude)
     {
         var target = SelectTarget(skill.Target, opposingTeam);
         if (target == null)
@@ -175,11 +190,10 @@ public class CombatEngine
 
         var enrageMultiplier = actor is Enemy { IsEnraged: true } enragedEnemy ? enragedEnemy.EnrageDamageMultiplier : 1.0;
         var raw = skill.BaseDamage * damageMultiplier * enrageMultiplier;
-        var weak = GetStatus(actor, "Weak");
-        if (weak != null)
+        if (weakMagnitude > 0)
         {
-            raw *= 1 - weak.Magnitude / 100.0;
-            Log($"  {actor.DisplayName} is Weak: damage reduced by {weak.Magnitude}%.");
+            raw *= 1 - weakMagnitude / 100.0;
+            Log($"  {actor.DisplayName} is Weak: damage reduced by {weakMagnitude}%.");
         }
 
         var rawInt = (int)Math.Round(raw);
@@ -220,7 +234,7 @@ public class CombatEngine
             var healTarget = SelectTarget(skill.SecondaryTarget.Value, friendlyTeam);
             if (healTarget != null)
             {
-                ApplyHeal(actor, healTarget, skill.BaseHeal, spiritMultiplier);
+                ApplyHeal(actor, healTarget, skill.BaseHeal, spiritMultiplier, weakMagnitude);
             }
         }
 
@@ -233,7 +247,7 @@ public class CombatEngine
         }
     }
 
-    private void ResolveHeal(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam, double spiritMultiplier)
+    private void ResolveHeal(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam, double spiritMultiplier, int weakMagnitude)
     {
         var target = skill.Target == TargetType.SelfTarget ? actor : SelectTarget(skill.Target, friendlyTeam);
         if (target == null)
@@ -242,17 +256,16 @@ public class CombatEngine
             return;
         }
 
-        ApplyHeal(actor, target, skill.BaseHeal, spiritMultiplier);
+        ApplyHeal(actor, target, skill.BaseHeal, spiritMultiplier, weakMagnitude);
     }
 
-    private void ApplyHeal(ICombatant caster, ICombatant target, int baseHeal, double spiritMultiplier)
+    private void ApplyHeal(ICombatant caster, ICombatant target, int baseHeal, double spiritMultiplier, int weakMagnitude)
     {
         var raw = baseHeal * spiritMultiplier;
-        var weak = GetStatus(caster, "Weak");
-        if (weak != null)
+        if (weakMagnitude > 0)
         {
-            raw *= 1 - weak.Magnitude / 100.0;
-            Log($"  {caster.DisplayName} is Weak: healing reduced by {weak.Magnitude}%.");
+            raw *= 1 - weakMagnitude / 100.0;
+            Log($"  {caster.DisplayName} is Weak: healing reduced by {weakMagnitude}%.");
         }
 
         var healAmount = (int)Math.Round(raw);
@@ -338,6 +351,8 @@ public class CombatEngine
 
     private void TickStatusDurations(ICombatant combatant)
     {
+        // Until-Consumed statuses (Shield, Primed, Weak) never decrement here — they're removed
+        // only by ConsumeWeak / shield absorption / etc. at the point they're actually used.
         foreach (var status in combatant.ActiveStatuses.ToList())
         {
             if (status.Duration != DurationType.FixedTurn) continue;

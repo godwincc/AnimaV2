@@ -103,8 +103,7 @@ public static class SampleAnimas
             BaseDamage = 18, // +40% Increase Effect augment (13 -> 18), earned mid-run
             OnHitStatusKeyword = "Weak",
             OnHitStatusMagnitude = 20,
-            OnHitStatusDuration = DurationType.FixedTurn,
-            OnHitStatusDurationTurns = 1,
+            OnHitStatusDuration = DurationType.UntilConsumed, // consumed by the target's next skill, not a Round tick
         };
 
         var hardened = new Skill
