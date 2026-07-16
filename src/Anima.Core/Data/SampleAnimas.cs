@@ -157,6 +157,86 @@ public static class SampleAnimas
         };
     }
 
+    // Hybrid test build — same Onyx base/Head/Frame/Crest as Boulder, but Tail is swapped for
+    // Verdant's Cleanse instead of Taunt. Not a real Primitive; exists to compare a self-sustain
+    // build (no forced redirect, but self-sufficient healing) against Boulder's aggro-tank build.
+    // Per the locked scaling rule, a part's Color is just its origin/flavor — the Anima's own
+    // stats (Onyx's Spirit multiplier here, not Verdant's) still govern the skill's scaling.
+    public static AnimaUnit CreateBastion()
+    {
+        var stats = new Stats
+        {
+            MaxHp = 130,
+            Defense = 13,
+            Speed = 7,
+            DamageMultiplier = 1.0,
+            SpiritMultiplier = 0.8,
+        };
+
+        var bash = new Skill
+        {
+            Name = "Bash",
+            Part = Part.Head,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 2,
+            BaseDamage = 18, // +40% Increase Effect augment (13 -> 18), earned mid-run
+            OnHitStatusKeyword = "Weak",
+            OnHitStatusMagnitude = 20,
+            OnHitStatusDuration = DurationType.UntilConsumed,
+        };
+
+        var hardened = new Skill
+        {
+            Name = "Hardened",
+            Part = Part.Frame,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Buff,
+            Target = TargetType.SelfTarget,
+            EnergyCost = 1,
+            BaseShield = 18,
+            Duration = DurationType.UntilConsumed,
+        };
+
+        var cleanse = new Skill
+        {
+            Name = "Cleanse",
+            Part = Part.Tail,
+            Color = AnimaColor.Verdant, // part's own origin color; scaling still uses Bastion's own Spirit multiplier
+            Category = SkillCategory.Heal,
+            Target = TargetType.LowestHpAlly,
+            EnergyCost = 2,
+            BaseHeal = 33,
+            RemovesDebuff = true,
+        };
+
+        var courage = new Skill
+        {
+            Name = "Courage",
+            Part = Part.Crest,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Passive,
+            Target = TargetType.SelfTarget,
+            Trigger = TriggerType.PassiveConditional,
+            // -20% damage taken while in position 1 — see CombatEngine.GetCourageMultiplier.
+        };
+
+        return new AnimaUnit
+        {
+            Id = "Bastion",
+            Color = AnimaColor.Onyx,
+            BaseStats = stats,
+            Head = bash,
+            Frame = hardened,
+            Tail = cleanse,
+            Crest = courage,
+            CurrentHp = stats.MaxHp,
+            Position = 1,
+        };
+    }
+
     // Verdant Primitive 1 (healer)
     public static AnimaUnit CreateSprout()
     {
