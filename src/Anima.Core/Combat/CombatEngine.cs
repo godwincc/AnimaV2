@@ -262,6 +262,8 @@ public class CombatEngine
         }
     }
 
+    private const int MaxShieldMagnitude = 50;
+
     private void ResolveBuff(ICombatant actor, Skill skill)
     {
         if (skill.BaseShield > 0)
@@ -269,12 +271,12 @@ public class CombatEngine
             var existingShield = GetStatus(actor, "Shield");
             if (existingShield != null)
             {
-                existingShield.Magnitude += skill.BaseShield;
+                existingShield.Magnitude = Math.Min(existingShield.Magnitude + skill.BaseShield, MaxShieldMagnitude);
                 Log($"  {actor.DisplayName} gains {skill.BaseShield} Shield (now {existingShield.Magnitude}).");
             }
             else
             {
-                ApplyStatus(actor, "Shield", skill.BaseShield, skill.Duration, skill.DurationTurns ?? 0);
+                ApplyStatus(actor, "Shield", Math.Min(skill.BaseShield, MaxShieldMagnitude), skill.Duration, skill.DurationTurns ?? 0);
                 Log($"  {actor.DisplayName} gains {skill.BaseShield} Shield.");
             }
             return;
