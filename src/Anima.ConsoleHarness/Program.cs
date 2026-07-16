@@ -82,16 +82,15 @@ Skill? ChooseEmberSkill(CombatState combatState)
     return slash != null && combatState.SharedEnergy >= slash.EnergyCost ? slash : null;
 }
 
-// Taunt first if affordable, otherwise Bash if affordable, otherwise pass.
+// Bash whenever the target isn't already Weak (so the debuff actually gets applied/refreshed),
+// otherwise Taunt. Either way, pass if the chosen skill isn't affordable.
 Skill? ChooseBoulderSkill(CombatState combatState)
 {
-    var taunt = combatState.PlayerHand.FirstOrDefault(s => s.Name == "Taunt");
-    if (taunt != null && combatState.SharedEnergy >= taunt.EnergyCost) return taunt;
+    var targetIsWeak = combatState.EnemyTeam.Any(e => e.CurrentHp > 0 && e.ActiveStatuses.Any(s => s.Keyword == "Weak"));
+    var desired = targetIsWeak ? "Taunt" : "Bash";
 
-    var bash = combatState.PlayerHand.FirstOrDefault(s => s.Name == "Bash");
-    if (bash != null && combatState.SharedEnergy >= bash.EnergyCost) return bash;
-
-    return null;
+    var skill = combatState.PlayerHand.FirstOrDefault(s => s.Name == desired);
+    return skill != null && combatState.SharedEnergy >= skill.EnergyCost ? skill : null;
 }
 
 // Heal the lowest-HP ally with Lifebloom if they're below 50% HP and it's affordable,
