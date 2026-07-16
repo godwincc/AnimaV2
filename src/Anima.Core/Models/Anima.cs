@@ -20,6 +20,7 @@ public class Anima : ICombatant
     public Skill[] DeckSkills => new[] { Head, Frame, Tail }; // Crest excluded from deck
 
     public string DisplayName => Id;
+    public int MaxHp => BaseStats.MaxHp;
     public int Speed => BaseStats.Speed;
     public int Defense => BaseStats.Defense;
 }
