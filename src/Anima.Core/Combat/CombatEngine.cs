@@ -198,31 +198,10 @@ public class CombatEngine
         }
 
         var rawInt = (int)Math.Round(raw);
-        var remaining = rawInt;
-
-        var shield = GetStatus(target, "Shield");
-        var absorbed = 0;
-        if (shield != null && remaining > 0)
-        {
-            absorbed = Math.Min(shield.Magnitude, remaining);
-            shield.Magnitude -= absorbed;
-            remaining -= absorbed;
-            if (shield.Magnitude <= 0)
-            {
-                target.ActiveStatuses.Remove(shield);
-            }
-        }
-
-        var final = remaining > 0 ? Math.Max(remaining - target.Defense, 1) : 0;
-        target.CurrentHp = Math.Max(0, target.CurrentHp - final);
-
-        Log($"  Target: {target.DisplayName}");
         var multLabel = enrageMultiplier > 1.0 ? $"{damageMultiplier:0.##} mult x {enrageMultiplier:0.##} enrage" : $"{damageMultiplier:0.##} mult";
-        var mathLine = absorbed > 0
-            ? $"  Damage: {skill.BaseDamage} base x {multLabel} = {rawInt} raw - {absorbed} shield = {remaining} - {target.Defense} def = {final} dealt"
-            : $"  Damage: {skill.BaseDamage} base x {multLabel} = {rawInt} raw - {target.Defense} def = {final} dealt";
-        Log(mathLine);
-        Log($"  {target.DisplayName} HP: {target.CurrentHp}");
+        var final = ApplyDamage(target, rawInt, $"{skill.BaseDamage} base x {multLabel}");
+
+        TriggerReactiveEffects(actor, target, skill);
 
         if (skill.OnHitStatusKeyword != null)
         {
@@ -245,6 +224,62 @@ public class CombatEngine
             var before = actor.CurrentHp;
             actor.CurrentHp = Math.Min(actor.CurrentHp + healAmount, actor.MaxHp);
             Log($"  {actor.DisplayName} drains {actor.CurrentHp - before} HP from the hit ({actor.DisplayName} HP: {actor.CurrentHp}).");
+        }
+    }
+
+    // Shared damage pipeline (Shield absorb, then Defense floor) — used by both direct attacks
+    // and reactive counter-damage (Retaliate/Thorns), so counters respect the attacker's own
+    // Shield/Defense rather than being a bypassing special case.
+    private int ApplyDamage(ICombatant target, int rawDamage, string sourceDescription)
+    {
+        var remaining = rawDamage;
+
+        var shield = GetStatus(target, "Shield");
+        var absorbed = 0;
+        if (shield != null && remaining > 0)
+        {
+            absorbed = Math.Min(shield.Magnitude, remaining);
+            shield.Magnitude -= absorbed;
+            remaining -= absorbed;
+            if (shield.Magnitude <= 0)
+            {
+                target.ActiveStatuses.Remove(shield);
+            }
+        }
+
+        var final = remaining > 0 ? Math.Max(remaining - target.Defense, 1) : 0;
+        target.CurrentHp = Math.Max(0, target.CurrentHp - final);
+
+        Log($"  Target: {target.DisplayName}");
+        var mathLine = absorbed > 0
+            ? $"  Damage: {sourceDescription} = {rawDamage} raw - {absorbed} shield = {remaining} - {target.Defense} def = {final} dealt"
+            : $"  Damage: {sourceDescription} = {rawDamage} raw - {target.Defense} def = {final} dealt";
+        Log(mathLine);
+        Log($"  {target.DisplayName} HP: {target.CurrentHp}");
+
+        return final;
+    }
+
+    // Retaliate/Thorns: flat counter-damage back at a Melee attacker, through the same
+    // Shield/Defense pipeline as any other hit. Doesn't itself re-trigger reactive effects
+    // (no counter-to-a-counter) and only fires if the defender survived the original hit.
+    private void TriggerReactiveEffects(ICombatant attacker, ICombatant target, Skill skill)
+    {
+        if (skill.Range != AttackRange.Melee) return;
+        if (target.CurrentHp <= 0) return;
+
+        var retaliate = GetStatus(target, "Retaliate");
+        if (retaliate != null)
+        {
+            Log($"  {target.DisplayName} Retaliates!");
+            ApplyDamage(attacker, retaliate.Magnitude, "Retaliate counter");
+        }
+
+        var thorns = GetStatus(target, "Thorns");
+        if (thorns != null)
+        {
+            Log($"  {target.DisplayName}'s Thorns triggers!");
+            ApplyDamage(attacker, thorns.Magnitude, "Thorns counter");
         }
     }
 
@@ -309,8 +344,11 @@ public class CombatEngine
         }
 
         // Simplification: a non-Shield Buff skill applies a status named after itself to its caster.
-        ApplyStatus(actor, skill.Name, 0, skill.Duration, skill.DurationTurns ?? 0);
-        Log($"  {actor.DisplayName} gains {skill.Name}.");
+        // BuffMagnitude carries a value for statuses that need one (e.g. Retaliate/Thorns counter amount).
+        ApplyStatus(actor, skill.Name, skill.BuffMagnitude, skill.Duration, skill.DurationTurns ?? 0);
+        Log(skill.BuffMagnitude > 0
+            ? $"  {actor.DisplayName} gains {skill.Name} ({skill.BuffMagnitude})."
+            : $"  {actor.DisplayName} gains {skill.Name}.");
     }
 
     private static void ApplyStatus(ICombatant target, string keyword, int magnitude, DurationType duration, int durationTurns)
