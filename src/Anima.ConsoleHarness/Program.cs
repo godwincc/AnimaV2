@@ -69,26 +69,23 @@ else
 
 // ---- Skill-selection priorities (hardcoded, one per Anima) ----
 
-// Always Slash if it's in hand and affordable, otherwise pass.
-Skill? ChooseEmberSkill(CombatState combatState)
-{
-    var slash = combatState.Hand.FirstOrDefault(s => s.Name == "Slash");
-    return slash != null && combatState.SharedEnergy >= slash.EnergyCost ? slash : null;
-}
+// Prefer Slash; if it's not in hand, fall back through the rest of the kit (damage before
+// pure utility) rather than passing just because the single favorite card wasn't drawn.
+Skill? ChooseEmberSkill(CombatState combatState) =>
+    ChooseFromPriority(combatState, "Slash", "Execute", "Charge");
 
 // Bash whenever the target isn't already Weak (so the debuff actually gets applied/refreshed),
-// otherwise Taunt. Either way, pass if the chosen skill isn't affordable.
+// otherwise Taunt. Either way, fall back through the rest of the kit before passing.
 Skill? ChooseBoulderSkill(CombatState combatState)
 {
     var targetIsWeak = combatState.EnemyTeam.Any(e => e.CurrentHp > 0 && e.ActiveStatuses.Any(s => s.Keyword == "Weak"));
-    var desired = targetIsWeak ? "Taunt" : "Bash";
-
-    var skill = combatState.Hand.FirstOrDefault(s => s.Name == desired);
-    return skill != null && combatState.SharedEnergy >= skill.EnergyCost ? skill : null;
+    return targetIsWeak
+        ? ChooseFromPriority(combatState, "Taunt", "Bash", "Hardened")
+        : ChooseFromPriority(combatState, "Bash", "Taunt", "Hardened");
 }
 
-// Heal the lowest-HP ally with Lifebloom if they're below 50% HP and it's affordable,
-// otherwise Smite if affordable, otherwise pass.
+// Heal the lowest-HP ally with Lifebloom if they're below 50% HP, otherwise Smite. Either way,
+// fall back through the rest of the kit before passing.
 Skill? ChooseSproutSkill(CombatState combatState)
 {
     var lowestAlly = combatState.PlayerTeam
@@ -96,14 +93,20 @@ Skill? ChooseSproutSkill(CombatState combatState)
         .OrderBy(a => (double)a.CurrentHp / a.MaxHp)
         .First();
 
-    if ((double)lowestAlly.CurrentHp / lowestAlly.MaxHp < 0.5)
+    return (double)lowestAlly.CurrentHp / lowestAlly.MaxHp < 0.5
+        ? ChooseFromPriority(combatState, "Lifebloom", "Smite", "Guiding Light")
+        : ChooseFromPriority(combatState, "Smite", "Lifebloom", "Guiding Light");
+}
+
+// Shared fallback: play the first listed skill that's both in Hand and affordable. Callers
+// order their list damage/heal skills first, pure-utility last, so a drawn hand actually gets
+// used instead of passing just because the single most-preferred card wasn't drawn this turn.
+Skill? ChooseFromPriority(CombatState combatState, params string[] priority)
+{
+    foreach (var name in priority)
     {
-        var lifebloom = combatState.Hand.FirstOrDefault(s => s.Name == "Lifebloom");
-        if (lifebloom != null && combatState.SharedEnergy >= lifebloom.EnergyCost) return lifebloom;
+        var skill = combatState.Hand.FirstOrDefault(s => s.Name == name);
+        if (skill != null && combatState.SharedEnergy >= skill.EnergyCost) return skill;
     }
-
-    var smite = combatState.Hand.FirstOrDefault(s => s.Name == "Smite");
-    if (smite != null && combatState.SharedEnergy >= smite.EnergyCost) return smite;
-
     return null;
 }
