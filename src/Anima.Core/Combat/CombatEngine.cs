@@ -10,6 +10,8 @@ public class CombatEngine
 
     private const int HandCap = 10;
     private const int CopiesPerSkill = 3;
+    private const double CrestConditionalMultiplier = 1.25;
+    private const double CourageDamageReduction = 0.8;
 
     // Narration hook — kept out of Core so callers (console, UI, tests) decide how/whether to surface it.
     public Action<string>? OnLog { get; set; }
@@ -214,6 +216,39 @@ public class CombatEngine
         return weak.Magnitude;
     }
 
+    // Reckless (Crimson)/Vengeance (Onyx): +25% damage dealt while this Anima's own HP is
+    // below 50% of MaxHp. Self-referential, so it's checked here rather than via a status.
+    private double GetOffensiveCrestMultiplier(ICombatant actor)
+    {
+        if (actor is not Anima anima) return 1.0;
+        if (anima.Crest.Name is not ("Reckless" or "Vengeance")) return 1.0;
+        if (anima.CurrentHp >= anima.MaxHp * 0.5) return 1.0;
+
+        Log($"  {anima.DisplayName}'s {anima.Crest.Name} triggers: damage x{CrestConditionalMultiplier:0.##} (HP below 50%).");
+        return CrestConditionalMultiplier;
+    }
+
+    // Soul Link (Verdant): +25% healing done while this Anima's own HP is above 50% of MaxHp.
+    private double GetHealingCrestMultiplier(ICombatant actor)
+    {
+        if (actor is not Anima anima) return 1.0;
+        if (anima.Crest.Name != "Soul Link") return 1.0;
+        if (anima.CurrentHp <= anima.MaxHp * 0.5) return 1.0;
+
+        Log($"  {anima.DisplayName}'s Soul Link triggers: healing x{CrestConditionalMultiplier:0.##} (HP above 50%).");
+        return CrestConditionalMultiplier;
+    }
+
+    // Courage (Onyx): -20% damage taken while this Anima is in position 1.
+    private double GetCourageMultiplier(ICombatant target)
+    {
+        if (target is not Anima anima) return 1.0;
+        if (anima.Crest.Name != "Courage") return 1.0;
+        if (anima.Position != 1) return 1.0;
+
+        return CourageDamageReduction;
+    }
+
     private void ResolveAttack(
         ICombatant actor,
         Skill skill,
@@ -232,6 +267,11 @@ public class CombatEngine
 
         var enrageMultiplier = actor is Enemy { IsEnraged: true } enragedEnemy ? enragedEnemy.EnrageDamageMultiplier : 1.0;
         var raw = skill.BaseDamage * damageMultiplier * enrageMultiplier;
+
+        // Self modifiers (Reckless/Vengeance, and eventually Primed) apply first; opponent-applied
+        // debuffs (Weak) apply last — same multiplier chain, self before opponent.
+        raw *= GetOffensiveCrestMultiplier(actor);
+
         if (weakMagnitude > 0)
         {
             raw *= 1 - weakMagnitude / 100.0;
@@ -288,14 +328,24 @@ public class CombatEngine
             }
         }
 
+        // Courage: a percentage reduction on the target's own side, applied before Defense's
+        // flat subtraction (not after) so it stays meaningful even against hits that would
+        // otherwise floor out at 1 — a post-Defense percentage cut would round away to nothing.
+        var courageMultiplier = GetCourageMultiplier(target);
+        var preCourage = remaining;
+        if (remaining > 0 && courageMultiplier < 1.0)
+        {
+            remaining = (int)Math.Round(remaining * courageMultiplier);
+            Log($"  {target.DisplayName}'s Courage triggers: incoming damage x{courageMultiplier:0.##} (position 1).");
+        }
+
         var final = remaining > 0 ? Math.Max(remaining - target.Defense, 1) : 0;
         target.CurrentHp = Math.Max(0, target.CurrentHp - final);
 
         Log($"  Target: {target.DisplayName}");
-        var mathLine = absorbed > 0
-            ? $"  Damage: {sourceDescription} = {rawDamage} raw - {absorbed} shield = {remaining} - {target.Defense} def = {final} dealt"
-            : $"  Damage: {sourceDescription} = {rawDamage} raw - {target.Defense} def = {final} dealt";
-        Log(mathLine);
+        var afterShield = absorbed > 0 ? $"{rawDamage} raw - {absorbed} shield = {preCourage}" : $"{rawDamage} raw";
+        var afterCourage = courageMultiplier < 1.0 ? $" x{courageMultiplier:0.##} Courage = {remaining}" : "";
+        Log($"  Damage: {sourceDescription} = {afterShield}{afterCourage} - {target.Defense} def = {final} dealt");
         Log($"  {target.DisplayName} HP: {target.CurrentHp}");
 
         PurgeDeadAnimaCards(target);
@@ -359,6 +409,11 @@ public class CombatEngine
     private void ApplyHeal(ICombatant caster, ICombatant target, int baseHeal, double spiritMultiplier, int weakMagnitude)
     {
         var raw = baseHeal * spiritMultiplier;
+
+        // Self modifiers (Soul Link) apply first; opponent-applied debuffs (Weak) apply last —
+        // same ordering as the damage chain.
+        raw *= GetHealingCrestMultiplier(caster);
+
         if (weakMagnitude > 0)
         {
             raw *= 1 - weakMagnitude / 100.0;
