@@ -26,14 +26,6 @@ var state = new CombatState
 {
     PlayerTeam = new List<AnimaUnit> { ember, boulder, sprout },
     EnemyTeam = new List<Enemy> { sentinel },
-    // Full 27-card deck/draw system isn't built yet — hardcode the 9 unique deck skills
-    // (Head/Frame/Tail x3 Animas; Crests are never drawn) into the hand.
-    PlayerHand = new List<Skill>
-    {
-        ember.Head, ember.Frame, ember.Tail,
-        boulder.Head, boulder.Frame, boulder.Tail,
-        sprout.Head, sprout.Frame, sprout.Tail,
-    },
 };
 
 var engine = new CombatEngine(state)
@@ -47,6 +39,8 @@ var engine = new CombatEngine(state)
         _ => null,
     },
 };
+
+engine.StartCombat();
 
 // Safety valve: a prototype AI/priority combo can produce a genuine stalemate (e.g. a
 // stacking Shield outpacing the remaining damage output) — cap rounds so the harness
@@ -78,7 +72,7 @@ else
 // Always Slash if it's in hand and affordable, otherwise pass.
 Skill? ChooseEmberSkill(CombatState combatState)
 {
-    var slash = combatState.PlayerHand.FirstOrDefault(s => s.Name == "Slash");
+    var slash = combatState.Hand.FirstOrDefault(s => s.Name == "Slash");
     return slash != null && combatState.SharedEnergy >= slash.EnergyCost ? slash : null;
 }
 
@@ -89,7 +83,7 @@ Skill? ChooseBoulderSkill(CombatState combatState)
     var targetIsWeak = combatState.EnemyTeam.Any(e => e.CurrentHp > 0 && e.ActiveStatuses.Any(s => s.Keyword == "Weak"));
     var desired = targetIsWeak ? "Taunt" : "Bash";
 
-    var skill = combatState.PlayerHand.FirstOrDefault(s => s.Name == desired);
+    var skill = combatState.Hand.FirstOrDefault(s => s.Name == desired);
     return skill != null && combatState.SharedEnergy >= skill.EnergyCost ? skill : null;
 }
 
@@ -104,11 +98,11 @@ Skill? ChooseSproutSkill(CombatState combatState)
 
     if ((double)lowestAlly.CurrentHp / lowestAlly.MaxHp < 0.5)
     {
-        var lifebloom = combatState.PlayerHand.FirstOrDefault(s => s.Name == "Lifebloom");
+        var lifebloom = combatState.Hand.FirstOrDefault(s => s.Name == "Lifebloom");
         if (lifebloom != null && combatState.SharedEnergy >= lifebloom.EnergyCost) return lifebloom;
     }
 
-    var smite = combatState.PlayerHand.FirstOrDefault(s => s.Name == "Smite");
+    var smite = combatState.Hand.FirstOrDefault(s => s.Name == "Smite");
     if (smite != null && combatState.SharedEnergy >= smite.EnergyCost) return smite;
 
     return null;

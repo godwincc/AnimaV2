@@ -6,6 +6,10 @@ using Anima.Core.Models;
 public class CombatEngine
 {
     private readonly CombatState _state;
+    private readonly Random _random = new();
+
+    private const int HandCap = 10;
+    private const int CopiesPerSkill = 3;
 
     // Narration hook — kept out of Core so callers (console, UI, tests) decide how/whether to surface it.
     public Action<string>? OnLog { get; set; }
@@ -16,6 +20,40 @@ public class CombatEngine
     public CombatEngine(CombatState state)
     {
         _state = state;
+    }
+
+    // Builds the shared 27-card team deck (Head/Frame/Tail x3 copies each, Crests excluded),
+    // shuffles it, and draws the opening hand of 7. Call once before the first RunRound().
+    public void StartCombat()
+    {
+        BuildDeck();
+        Shuffle(_state.DrawPile);
+        DrawCards(7);
+    }
+
+    private void BuildDeck()
+    {
+        foreach (var anima in _state.PlayerTeam)
+        {
+            foreach (var skill in anima.DeckSkills)
+            {
+                for (var i = 0; i < CopiesPerSkill; i++)
+                {
+                    _state.DrawPile.Add(skill);
+                }
+            }
+        }
+    }
+
+    // Fisher-Yates — the deck shuffle is an explicit, documented exception to the
+    // "no randomness in combat" rule, so a plain Random is fine here.
+    private void Shuffle(List<Skill> pile)
+    {
+        for (var i = pile.Count - 1; i > 0; i--)
+        {
+            var j = _random.Next(i + 1);
+            (pile[i], pile[j]) = (pile[j], pile[i]);
+        }
     }
 
     public void RunRound()
@@ -109,6 +147,9 @@ public class CombatEngine
             _state.PlayerTeam.Cast<ICombatant>().ToList(),
             anima.BaseStats.DamageMultiplier,
             anima.BaseStats.SpiritMultiplier);
+
+        _state.Hand.Remove(skill);
+        _state.DiscardPile.Add(skill);
     }
 
     private void ResolveEnemyTurn(Enemy enemy)
@@ -408,7 +449,27 @@ public class CombatEngine
 
     private void Log(string message) => OnLog?.Invoke(message);
 
-    private void DrawCards(int count) { /* TODO: full 27-card deck/draw system */ }
+    private void DrawCards(int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            if (_state.Hand.Count >= HandCap) break; // cap reached — remaining draws are skipped/lost
+
+            if (_state.DrawPile.Count == 0)
+            {
+                if (_state.DiscardPile.Count == 0) break; // nothing left anywhere to draw
+
+                _state.DrawPile.AddRange(_state.DiscardPile);
+                _state.DiscardPile.Clear();
+                Shuffle(_state.DrawPile);
+                Log("  Discard pile shuffled back into the draw pile.");
+            }
+
+            var card = _state.DrawPile[0];
+            _state.DrawPile.RemoveAt(0);
+            _state.Hand.Add(card);
+        }
+    }
 
     private void TickStatusDurations(ICombatant combatant)
     {
