@@ -29,6 +29,7 @@ public class Skill
     public int? OnHitStatusDurationTurns { get; set; }
     public TargetType? SecondaryTarget { get; set; } // e.g. Smite healing LowestHpAlly alongside its Enemy attack target
     public double? SelfHealPercentOfDamage { get; set; } // e.g. Leech Mother's Draining Claw
+    public bool RemovesDebuff { get; set; } // e.g. Cleanse: heal + strip one debuff from its target
 
     // Magnitude for non-Shield self-Buff skills (e.g. Retaliate/Thorns counter-damage amount).
     public int BuffMagnitude { get; set; }

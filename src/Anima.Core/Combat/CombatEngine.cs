@@ -409,6 +409,25 @@ public class CombatEngine
         }
 
         ApplyHeal(actor, target, skill.BaseHeal, spiritMultiplier, weakMagnitude);
+
+        if (skill.RemovesDebuff)
+        {
+            RemoveOneDebuff(target);
+        }
+    }
+
+    // Debuffs eligible for Cleanse-style removal — the negative statuses one Anima can impose
+    // on another. Shield/Retaliate/Thorns/Taunt are self-applied buffs, not debuffs, so they're
+    // excluded.
+    private static readonly string[] DebuffKeywords = { "Weak", "Bleed", "Marked" };
+
+    private void RemoveOneDebuff(ICombatant target)
+    {
+        var debuff = target.ActiveStatuses.FirstOrDefault(s => DebuffKeywords.Contains(s.Keyword));
+        if (debuff == null) return;
+
+        target.ActiveStatuses.Remove(debuff);
+        Log($"  {target.DisplayName}'s {debuff.Keyword} is cleansed.");
     }
 
     private void ApplyHeal(ICombatant caster, ICombatant target, int baseHeal, double spiritMultiplier, int weakMagnitude)
