@@ -200,7 +200,7 @@ public class CombatEngine
                 ResolveMove(actor, skill, opposingTeam, friendlyTeam);
                 break;
             case SkillCategory.Buff:
-                ResolveBuff(actor, skill);
+                ResolveBuff(actor, skill, friendlyTeam);
                 break;
             case SkillCategory.Heal:
                 ResolveHeal(actor, skill, friendlyTeam, spiritMultiplier, weakMagnitude);
@@ -268,6 +268,11 @@ public class CombatEngine
         {
             Log("  No valid target.");
             return;
+        }
+
+        if (skill.Target is TargetType.Enemy or TargetType.Ally)
+        {
+            ConsumeMarked(target);
         }
 
         var enrageMultiplier = actor is Enemy { IsEnraged: true } enragedEnemy ? enragedEnemy.EnrageDamageMultiplier : 1.0;
@@ -417,8 +422,7 @@ public class CombatEngine
     }
 
     // Debuffs eligible for Cleanse-style removal — the negative statuses one Anima can impose
-    // on another. Shield/Retaliate/Thorns/Taunt are self-applied buffs, not debuffs, so they're
-    // excluded.
+    // on another. Shield/Retaliate/Thorns are self-applied buffs, not debuffs, so they're excluded.
     private static readonly string[] DebuffKeywords = { "Weak", "Bleed", "Marked" };
 
     private void RemoveOneDebuff(ICombatant target)
@@ -484,7 +488,7 @@ public class CombatEngine
 
     private const int MaxShieldMagnitude = 50;
 
-    private void ResolveBuff(ICombatant actor, Skill skill)
+    private void ResolveBuff(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam)
     {
         if (skill.BaseShield > 0)
         {
@@ -502,12 +506,53 @@ public class CombatEngine
             return;
         }
 
+        if (skill.Name == "Taunt")
+        {
+            // Taunt is "apply Marked to self" -- it shares Marked's underlying status/slot
+            // rather than maintaining a separate implementation.
+            ApplyMarked(actor, friendlyTeam);
+            return;
+        }
+
         // Simplification: a non-Shield Buff skill applies a status named after itself to its caster.
         // BuffMagnitude carries a value for statuses that need one (e.g. Retaliate/Thorns counter amount).
         ApplyStatus(actor, skill.Name, skill.BuffMagnitude, skill.Duration, skill.DurationTurns ?? 0);
         Log(skill.BuffMagnitude > 0
             ? $"  {actor.DisplayName} gains {skill.Name} ({skill.BuffMagnitude})."
             : $"  {actor.DisplayName} gains {skill.Name}.");
+    }
+
+    // A team can only have one Marked target at a time -- applying a new Marked (whether via
+    // Taunt targeting self, or a future Misdirect-style skill targeting an ally) strips any
+    // existing Marked on that team first. Until-Consumed: persists until the next opposing
+    // action that would target this team, redirects it here, then is removed by ConsumeMarked
+    // -- fixing the same turn-order timing bug already found for Weak, where a 1-turn status
+    // applied by the slower combatant died before the faster enemy's next turn ever used it.
+    private void ApplyMarked(ICombatant target, List<ICombatant> team)
+    {
+        foreach (var member in team)
+        {
+            var existing = GetStatus(member, "Marked");
+            if (existing != null)
+            {
+                member.ActiveStatuses.Remove(existing);
+            }
+        }
+
+        ApplyStatus(target, "Marked", 0, DurationType.UntilConsumed, 0);
+        Log($"  {target.DisplayName} is Marked.");
+    }
+
+    // Consumes Marked at the moment it actually redirects a targeting decision (i.e. only for
+    // the Enemy/Ally target types SelectTarget gives Marked priority on) -- not for e.g. a
+    // LowestHpEnemy skill that happens to land on the Marked combatant for unrelated reasons.
+    private void ConsumeMarked(ICombatant target)
+    {
+        var marked = GetStatus(target, "Marked");
+        if (marked == null) return;
+
+        target.ActiveStatuses.Remove(marked);
+        Log($"  {target.DisplayName}'s Marked is consumed by the redirected action.");
     }
 
     private static void ApplyStatus(ICombatant target, string keyword, int magnitude, DurationType duration, int durationTurns)
@@ -529,11 +574,10 @@ public class CombatEngine
         var alive = team.Where(c => c.CurrentHp > 0).ToList();
         return targetType switch
         {
-            // Marked overrides Taunt: it forces the *opposing* team's attacks specifically,
-            // taking priority over any Taunt held within the target team.
+            // Marked (which Taunt applies to self) forces the opposing team's next action onto
+            // this combatant, taking priority over plain position order.
             TargetType.Enemy or TargetType.Ally =>
                 alive.FirstOrDefault(c => c.ActiveStatuses.Any(s => s.Keyword == "Marked"))
-                    ?? alive.FirstOrDefault(c => c.ActiveStatuses.Any(s => s.Keyword == "Taunt"))
                     ?? alive.OrderBy(c => c.Position).FirstOrDefault(),
             TargetType.LowestHpEnemy or TargetType.LowestHpAlly => alive.OrderBy(c => c.CurrentHp).FirstOrDefault(),
             _ => alive.FirstOrDefault(),

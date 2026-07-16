@@ -128,8 +128,8 @@ public static class SampleAnimas
             Category = SkillCategory.Buff,
             Target = TargetType.SelfTarget,
             EnergyCost = 2,
-            Duration = DurationType.FixedTurn,
-            DurationTurns = 1,
+            // Duration/DurationTurns aren't used -- CombatEngine special-cases "Taunt" to apply
+            // Marked instead, which is always Until-Consumed. See CombatEngine.ApplyMarked.
         };
 
         var courage = new Skill
