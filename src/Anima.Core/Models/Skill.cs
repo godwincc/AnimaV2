@@ -20,4 +20,13 @@ public class Skill
     // Positional exceptions (e.g. Marked Shot's pos-3-only) handled via override fields:
     public int[]? UsableFromOverride { get; set; }
     public int[]? TargetPositionOverride { get; set; }
+
+    // Secondary on-hit effects for Attack skills — narrow escape hatches, same pattern as the
+    // override fields above, rather than a general effect pipeline:
+    public string? OnHitStatusKeyword { get; set; } // e.g. Bash applying "Weak" to its target
+    public int OnHitStatusMagnitude { get; set; }
+    public DurationType OnHitStatusDuration { get; set; } = DurationType.Instant;
+    public int? OnHitStatusDurationTurns { get; set; }
+    public TargetType? SecondaryTarget { get; set; } // e.g. Smite healing LowestHpAlly alongside its Enemy attack target
+    public double? SelfHealPercentOfDamage { get; set; } // e.g. Leech Mother's Draining Claw
 }
