@@ -32,4 +32,9 @@ public class Skill
 
     // Magnitude for non-Shield self-Buff skills (e.g. Retaliate/Thorns counter-damage amount).
     public int BuffMagnitude { get; set; }
+
+    // Relative position shift applied to skill.Target, clamped to [1,3] — e.g. Push (+1),
+    // Pull/Ally-advance (-1). Distinct from TargetPositionOverride, which is an absolute
+    // self-move (e.g. Retreat).
+    public int? MoveOffset { get; set; }
 }

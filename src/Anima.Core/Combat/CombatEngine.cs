@@ -149,7 +149,7 @@ public class CombatEngine
                 ResolveAttack(actor, skill, opposingTeam, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude);
                 break;
             case SkillCategory.Move:
-                ResolveMove(actor, skill);
+                ResolveMove(actor, skill, opposingTeam, friendlyTeam);
                 break;
             case SkillCategory.Buff:
                 ResolveBuff(actor, skill);
@@ -314,14 +314,33 @@ public class CombatEngine
         Log($"  {target.DisplayName} HP: {target.CurrentHp}");
     }
 
-    private void ResolveMove(ICombatant actor, Skill skill)
+    private void ResolveMove(ICombatant actor, Skill skill, List<ICombatant> opposingTeam, List<ICombatant> friendlyTeam)
     {
         if (skill.TargetPositionOverride is { Length: > 0 } positions)
         {
             actor.Position = positions[0];
             Log($"  {actor.DisplayName} moves to position {actor.Position}.");
+            return;
+        }
+
+        if (skill.MoveOffset is int offset)
+        {
+            var team = IsFriendlyTargetType(skill.Target) ? friendlyTeam : opposingTeam;
+            var target = skill.Target == TargetType.SelfTarget ? actor : SelectTarget(skill.Target, team);
+            if (target == null)
+            {
+                Log("  No valid target.");
+                return;
+            }
+
+            var before = target.Position;
+            target.Position = Math.Clamp(target.Position + offset, 1, 3);
+            Log($"  {target.DisplayName} moves from position {before} to {target.Position}.");
         }
     }
+
+    private static bool IsFriendlyTargetType(TargetType targetType) =>
+        targetType is TargetType.Ally or TargetType.ChosenAny or TargetType.LowestHpAlly or TargetType.AllAllies or TargetType.SelfTarget;
 
     private const int MaxShieldMagnitude = 50;
 
