@@ -52,4 +52,35 @@ public static class SampleEnemies
             },
         };
     }
+
+    public static Enemy CreateGrovehide()
+    {
+        var clawSwipe = new Skill
+        {
+            Name = "Claw Swipe",
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 0,
+            BaseDamage = 18,
+        };
+
+        return new Enemy
+        {
+            Name = "Grovehide",
+            MaxHp = 60,
+            Defense = 8,
+            CurrentHp = 60,
+            Position = 1,
+            Speed = 5,
+            BehaviorRules = new List<EnemyBehaviorRule>
+            {
+                new EnemyBehaviorRule
+                {
+                    Condition = (enemy, state) => true, // always attacks
+                    Skill = clawSwipe,
+                },
+            },
+        };
+    }
 }

@@ -77,14 +77,14 @@ var playerAnima = new AnimaUnit
 
 // ---- Opponent ----
 
-var quillfang = SampleEnemies.CreateQuillfang();
+var grovehide = SampleEnemies.CreateGrovehide();
 
 // ---- Combat setup ----
 
 var state = new CombatState
 {
     PlayerTeam = new List<AnimaUnit> { playerAnima },
-    EnemyTeam = new List<Enemy> { quillfang },
+    EnemyTeam = new List<Enemy> { grovehide },
     // Full 27-card deck/draw system isn't built yet — hardcode the 3 unique deck skills into the hand.
     PlayerHand = new List<Skill> { slash, charge, execute },
 };
