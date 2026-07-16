@@ -74,12 +74,14 @@ else
 Skill? ChooseEmberSkill(CombatState combatState) =>
     ChooseFromPriority(combatState, "Slash", "Execute", "Charge");
 
-// Bash whenever the target isn't already Weak (so the debuff actually gets applied/refreshed),
-// otherwise Taunt. Either way, fall back through the rest of the kit before passing.
+// Proactively Taunt (self-Mark) whenever nobody on the player team is currently Marked --
+// it doesn't expire on its own (Until-Consumed), so recasting while one's already active
+// would just waste energy re-marking the same redirect. Otherwise Bash. Either way, fall
+// back through the rest of the kit before passing.
 Skill? ChooseBoulderSkill(CombatState combatState)
 {
-    var targetIsWeak = combatState.EnemyTeam.Any(e => e.CurrentHp > 0 && e.ActiveStatuses.Any(s => s.Keyword == "Weak"));
-    return targetIsWeak
+    var alreadyMarked = combatState.PlayerTeam.Any(a => a.CurrentHp > 0 && a.ActiveStatuses.Any(s => s.Keyword == "Marked"));
+    return !alreadyMarked
         ? ChooseFromPriority(combatState, "Taunt", "Bash", "Hardened")
         : ChooseFromPriority(combatState, "Bash", "Taunt", "Hardened");
 }
