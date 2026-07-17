@@ -810,4 +810,88 @@ public static class SampleAnimas
             Position = 1,
         };
     }
+
+    // Verdant Primitive 3 (Cleansing). Named "Lotus" -- distinct from Sprout/Thicket, same
+    // Verdant base stats, different kit/Archetype. Tail reuses Cleanse as-is from the Bastion
+    // hybrid test (see CreateBastion) -- this is that skill's first real home on a pure-Verdant
+    // Anima, now paired with its own Head/Frame/Crest instead of riding on an Onyx base.
+    public static AnimaUnit CreateLotus()
+    {
+        var stats = new Stats
+        {
+            MaxHp = 100,
+            Defense = 10,
+            Speed = 10,
+            DamageMultiplier = 0.7,
+            SpiritMultiplier = 1.3,
+        };
+
+        var purge = new Skill
+        {
+            Name = "Purge",
+            Part = Part.Head,
+            Color = AnimaColor.Verdant,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.NA,
+            Target = TargetType.ChosenEnemy,
+            EnergyCost = 2,
+            BaseDamage = 8,
+            RemovesBuff = true, // dispel -- the offensive mirror of Cleanse's RemovesDebuff; see CombatEngine.RemoveOneBuff
+        };
+
+        var silence = new Skill
+        {
+            Name = "Silence",
+            Part = Part.Frame,
+            Color = AnimaColor.Verdant,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.NA,
+            Target = TargetType.ChosenEnemy,
+            EnergyCost = 1,
+            BaseDamage = 7,
+            // PvE stand-in for disabling the target's Frame ability: stuns the target, skipping
+            // their next turn entirely -- same mechanism as Onyx's Disarm / Azure's Pin, just
+            // paired with damage here instead of being a pure Debuff-category skill. See
+            // CombatEngine.ApplyOnHitStatus / ConsumeStun.
+            OnHitStatusKeyword = "Stunned",
+            OnHitStatusDuration = DurationType.UntilConsumed,
+        };
+
+        var cleanse = new Skill
+        {
+            Name = "Cleanse",
+            Part = Part.Tail,
+            Color = AnimaColor.Verdant,
+            Category = SkillCategory.Heal,
+            Target = TargetType.LowestHpAlly,
+            EnergyCost = 2,
+            BaseHeal = 33,
+            RemovesDebuff = true,
+        };
+
+        var clarity = new Skill
+        {
+            Name = "Clarity",
+            Part = Part.Crest,
+            Color = AnimaColor.Verdant,
+            Category = SkillCategory.Passive,
+            Target = TargetType.SelfTarget,
+            Trigger = TriggerType.PassiveConditional,
+            // -1 energy cost (min 0) on the skill this Anima plays each Round -- see
+            // CombatEngine.GetEffectiveEnergyCost.
+        };
+
+        return new AnimaUnit
+        {
+            Id = "Lotus",
+            Color = AnimaColor.Verdant,
+            BaseStats = stats,
+            Head = purge,
+            Frame = silence,
+            Tail = cleanse,
+            Crest = clarity,
+            CurrentHp = stats.MaxHp,
+            Position = 1,
+        };
+    }
 }

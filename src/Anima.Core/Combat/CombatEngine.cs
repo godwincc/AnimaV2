@@ -204,8 +204,9 @@ public class CombatEngine
             return;
         }
 
-        Log($"{anima.DisplayName} uses {skill.Name} ({skill.EnergyCost} energy).");
-        _state.SharedEnergy -= skill.EnergyCost;
+        var energyCost = GetEffectiveEnergyCost(anima, skill);
+        Log($"{anima.DisplayName} uses {skill.Name} ({energyCost} energy).");
+        _state.SharedEnergy -= energyCost;
         ResolveSkill(
             anima,
             skill,
@@ -217,6 +218,15 @@ public class CombatEngine
         _state.Hand.Remove(skill);
         _state.DiscardPile.Add(skill);
     }
+
+    // Clarity (Verdant Cleansing kit): -1 energy cost (min 0) on the skill this Anima plays.
+    // The design doc frames this as "the first skill this Anima plays each turn" -- under the
+    // current one-action-per-Round engine (see CLAUDE.md's Action Phase), every skill a
+    // combatant plays already IS that Anima's only (hence first) play of its turn, so this
+    // simplifies to a flat per-use discount. Scoped to just this Anima's own energy spend, not
+    // a team-wide discount -- other Animas acting the same Round still pay full cost.
+    private static int GetEffectiveEnergyCost(Anima anima, Skill skill) =>
+        anima.Crest.Name == "Clarity" ? Math.Max(0, skill.EnergyCost - 1) : skill.EnergyCost;
 
     private void ResolveEnemyTurn(Enemy enemy)
     {
@@ -414,6 +424,11 @@ public class CombatEngine
         if (skill.OnHitStatusKeyword != null)
         {
             ApplyOnHitStatus(target, skill.OnHitStatusKeyword, skill.OnHitStatusMagnitude, skill.OnHitStatusDuration, skill.OnHitStatusDurationTurns ?? 0);
+        }
+
+        if (skill.RemovesBuff)
+        {
+            RemoveOneBuff(target);
         }
 
         if (skill.BaseHeal > 0 && skill.SecondaryTarget != null)
@@ -680,6 +695,19 @@ public class CombatEngine
 
         target.ActiveStatuses.Remove(debuff);
         Log($"  {target.DisplayName}'s {debuff.Keyword} is cleansed.");
+    }
+
+    // Purge (Verdant Cleansing kit): the offensive mirror of Cleanse -- strips one beneficial
+    // status instead of a harmful one. Every self-applied/positive status in the game so far.
+    private static readonly string[] BuffKeywords = { "Shield", "Primed", "Guarded", "Retaliate", "Thorns", "Frenzy", "Renew" };
+
+    private void RemoveOneBuff(ICombatant target)
+    {
+        var buff = target.ActiveStatuses.FirstOrDefault(s => BuffKeywords.Contains(s.Keyword));
+        if (buff == null) return;
+
+        target.ActiveStatuses.Remove(buff);
+        Log($"  {target.DisplayName}'s {buff.Keyword} is purged.");
     }
 
     private void ApplyHeal(ICombatant caster, ICombatant target, int baseHeal, double spiritMultiplier, int weakMagnitude)

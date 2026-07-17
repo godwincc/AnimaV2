@@ -31,6 +31,7 @@ public class Skill
     public double? SelfHealPercentOfDamage { get; set; } // e.g. Leech Mother's Draining Claw
     public double? SelfShieldPercentOfDamage { get; set; } // e.g. Guard Strike: Shield equal to damage dealt
     public bool RemovesDebuff { get; set; } // e.g. Cleanse: heal + strip one debuff from its target
+    public bool RemovesBuff { get; set; } // e.g. Purge: damage + strip one buff from its target -- the offensive mirror of RemovesDebuff
 
     // HOT (heal-over-time) fields for Heal-category skills -- e.g. Renew. Distinct from
     // OnHitStatusKeyword above, which is Attack-only and applies to the ATTACK's own target.
