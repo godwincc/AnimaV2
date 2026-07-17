@@ -13,6 +13,8 @@ public class CombatEngine
     private const double CrestConditionalMultiplier = 1.25;
     private const double CourageDamageReduction = 0.8;
     private const double AmbushMultiplier = 2.0;
+    private const double FrenzyMultiplier = 1.2;
+    private const double BloodthirstLifestealPercent = 0.25;
 
     // This Round's Initiative order, captured once per Round so Ambush can check whether the
     // acting combatant is literally the last entry in it (see GetOffensiveCrestMultiplier).
@@ -112,15 +114,21 @@ public class CombatEngine
         // (1 before 2 before 3) goes first. Fully deterministic — no randomness.
         return AllCombatants()
             .Where(c => c.CurrentHp > 0)
-            .OrderByDescending(c => c.Speed)
+            .OrderByDescending(GetEffectiveSpeed)
             .ThenBy(c => c is Enemy) // false (player) sorts before true (enemy)
             .ThenBy(c => c.Position)
             .ToList();
     }
 
+    // Frenzy (Crimson): +20% Speed for Initiative purposes while active. Kept separate from the
+    // base Speed property (rather than mutating BaseStats.Speed) so the boost cleanly disappears
+    // the moment Frenzy is consumed, with nothing to remember to revert.
+    private double GetEffectiveSpeed(ICombatant combatant) =>
+        combatant.ActiveStatuses.Any(s => s.Keyword == "Frenzy") ? combatant.Speed * FrenzyMultiplier : combatant.Speed;
+
     private void LogInitiativeOrder(List<ICombatant> initiativeOrder)
     {
-        var order = string.Join(" > ", initiativeOrder.Select(c => $"{c.DisplayName}(Spd {c.Speed})"));
+        var order = string.Join(" > ", initiativeOrder.Select(c => $"{c.DisplayName}(Spd {GetEffectiveSpeed(c):0.##})"));
         Log($"Initiative: {order}");
     }
 
@@ -211,10 +219,15 @@ public class CombatEngine
         // until that target's next skill use of any kind, regardless of Round/turn-order timing.
         var weakMagnitude = ConsumeWeak(actor);
 
+        // Frenzy: same Until-Consumed reasoning -- consumed on the caster's own next action of
+        // any kind (matching Weak's consumption scope), though the damage boost only manifests
+        // for Attack.
+        var frenzied = ConsumeFrenzy(actor);
+
         switch (skill.Category)
         {
             case SkillCategory.Attack:
-                ResolveAttack(actor, skill, opposingTeam, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude);
+                ResolveAttack(actor, skill, opposingTeam, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied);
                 break;
             case SkillCategory.Move:
                 ResolveMove(actor, skill, opposingTeam, friendlyTeam);
@@ -245,6 +258,16 @@ public class CombatEngine
         actor.ActiveStatuses.Remove(weak);
         Log($"  {actor.DisplayName}'s Weak is consumed.");
         return weak.Magnitude;
+    }
+
+    private bool ConsumeFrenzy(ICombatant actor)
+    {
+        var frenzy = GetStatus(actor, "Frenzy");
+        if (frenzy == null) return false;
+
+        actor.ActiveStatuses.Remove(frenzy);
+        Log($"  {actor.DisplayName}'s Frenzy is consumed.");
+        return true;
     }
 
     // Reckless (Crimson)/Vengeance (Onyx): +25% damage dealt while this Anima's own HP is
@@ -297,7 +320,8 @@ public class CombatEngine
         List<ICombatant> friendlyTeam,
         double damageMultiplier,
         double spiritMultiplier,
-        int weakMagnitude)
+        int weakMagnitude,
+        bool frenzied = false)
     {
         var target = SelectTarget(skill.Target, opposingTeam);
         if (target == null)
@@ -314,9 +338,15 @@ public class CombatEngine
         var enrageMultiplier = actor is Enemy { IsEnraged: true } enragedEnemy ? enragedEnemy.EnrageDamageMultiplier : 1.0;
         var raw = skill.BaseDamage * damageMultiplier * enrageMultiplier;
 
-        // Self modifiers (Reckless/Vengeance, and eventually Primed) apply first; opponent-applied
-        // debuffs (Weak) apply last — same multiplier chain, self before opponent.
+        // Self modifiers (Reckless/Vengeance, Frenzy, and eventually Primed) apply first;
+        // opponent-applied debuffs (Weak) apply last — same multiplier chain, self before opponent.
         raw *= GetOffensiveCrestMultiplier(actor);
+
+        if (frenzied)
+        {
+            raw *= FrenzyMultiplier;
+            Log($"  {actor.DisplayName}'s Frenzy triggers: damage x{FrenzyMultiplier:0.##}.");
+        }
 
         if (weakMagnitude > 0)
         {
@@ -351,7 +381,32 @@ public class CombatEngine
             actor.CurrentHp = Math.Min(actor.CurrentHp + healAmount, actor.MaxHp);
             Log($"  {actor.DisplayName} drains {actor.CurrentHp - before} HP from the hit ({actor.DisplayName} HP: {actor.CurrentHp}).");
         }
+
+        // Bloodthirst (Crimson): unlike SelfHealPercentOfDamage above (a per-skill effect, e.g.
+        // Leech Mother's Draining Claw), this is a Crest passive -- applies to every attack this
+        // Anima lands, not just one specific skill.
+        if (GetLifestealCrestPercent(actor) is double lifestealPct && final > 0)
+        {
+            var healAmount = (int)Math.Round(final * lifestealPct);
+            var before = actor.CurrentHp;
+            actor.CurrentHp = Math.Min(actor.CurrentHp + healAmount, actor.MaxHp);
+            Log($"  {actor.DisplayName}'s Bloodthirst triggers: heals {actor.CurrentHp - before} HP ({actor.DisplayName} HP: {actor.CurrentHp}).");
+        }
+
+        // Lunge (Crimson): moves the caster forward one position as part of the attack itself,
+        // rather than being a separate Move-category skill -- reuses MoveOffset, the same field
+        // Push/Pull/Ally-advance use for a Move skill's target shift.
+        if (skill.MoveOffset is int selfMoveOffset)
+        {
+            var beforePosition = actor.Position;
+            actor.Position = Math.Clamp(actor.Position + selfMoveOffset, 1, 3);
+            Log($"  {actor.DisplayName} moves from position {beforePosition} to {actor.Position}.");
+        }
     }
+
+    // Bloodthirst (Crimson): heals 25% of the damage this Anima deals, on every hit.
+    private static double? GetLifestealCrestPercent(ICombatant actor) =>
+        actor is Anima { Crest.Name: "Bloodthirst" } ? BloodthirstLifestealPercent : null;
 
     // Shared damage pipeline (Shield absorb, then Defense floor) — used by both direct attacks
     // and reactive counter-damage (Retaliate/Thorns), so counters respect the attacker's own

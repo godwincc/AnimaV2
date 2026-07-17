@@ -396,4 +396,87 @@ public static class SampleAnimas
             Position = 1,
         };
     }
+
+    // Crimson Primitive 2 (Sustain/DOT). Named "Reaper" rather than reusing "Ember" -- same
+    // Crimson base stats, different kit/Archetype.
+    public static AnimaUnit CreateReaper()
+    {
+        var stats = new Stats
+        {
+            MaxHp = 100,
+            Defense = 7,
+            Speed = 10,
+            DamageMultiplier = 1.3,
+            SpiritMultiplier = 0.7,
+        };
+
+        var rend = new Skill
+        {
+            Name = "Rend",
+            Part = Part.Head,
+            Color = AnimaColor.Crimson,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 2,
+            BaseDamage = 22,
+            OnHitStatusKeyword = "Bleed",
+            OnHitStatusMagnitude = 8, // Rend is this Archetype's signature DOT tool (higher energy cost, Head slot) -- hits harder than Azure Exploit's secondary-effect Bleed (5)
+            OnHitStatusDuration = DurationType.FixedTurn,
+            OnHitStatusDurationTurns = 3,
+        };
+
+        var lunge = new Skill
+        {
+            Name = "Lunge",
+            Part = Part.Frame,
+            Color = AnimaColor.Crimson,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 2,
+            BaseDamage = 20,
+            MoveOffset = -1, // "forward" = toward position 1; see CombatEngine.ResolveAttack
+        };
+
+        var frenzy = new Skill
+        {
+            Name = "Frenzy",
+            Part = Part.Tail,
+            Color = AnimaColor.Crimson,
+            Category = SkillCategory.Buff,
+            Range = AttackRange.NA,
+            Target = TargetType.SelfTarget,
+            EnergyCost = 2,
+            Duration = DurationType.UntilConsumed,
+            // Until-Consumed, not Fixed-turn: consumed on the caster's own next action (see
+            // CombatEngine.ConsumeFrenzy) -- a Fixed-turn:1 duration would tick down and vanish
+            // at the very next Round Start, before that next action (and the Initiative
+            // computation that precedes it) ever gets to use it. Same reasoning as Weak/Marked.
+        };
+
+        var bloodthirst = new Skill
+        {
+            Name = "Bloodthirst",
+            Part = Part.Crest,
+            Color = AnimaColor.Crimson,
+            Category = SkillCategory.Passive,
+            Target = TargetType.SelfTarget,
+            Trigger = TriggerType.PassiveEvent,
+            // Heals 25% of damage dealt on every hit -- see CombatEngine.GetLifestealCrestPercent.
+        };
+
+        return new AnimaUnit
+        {
+            Id = "Reaper",
+            Color = AnimaColor.Crimson,
+            BaseStats = stats,
+            Head = rend,
+            Frame = lunge,
+            Tail = frenzy,
+            Crest = bloodthirst,
+            CurrentHp = stats.MaxHp,
+            Position = 1,
+        };
+    }
 }
