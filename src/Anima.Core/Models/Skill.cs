@@ -32,6 +32,18 @@ public class Skill
     public double? SelfShieldPercentOfDamage { get; set; } // e.g. Guard Strike: Shield equal to damage dealt
     public bool RemovesDebuff { get; set; } // e.g. Cleanse: heal + strip one debuff from its target
 
+    // HOT (heal-over-time) fields for Heal-category skills -- e.g. Renew. Distinct from
+    // OnHitStatusKeyword above, which is Attack-only and applies to the ATTACK's own target.
+    public string? HotKeyword { get; set; }
+    public int HotMagnitude { get; set; }
+    public int? HotDurationTurns { get; set; }
+
+    // Bloom-style effect: an Attack skill that also refreshes an existing HOT on an ally (if one
+    // is already active), without applying a fresh one if none exists -- same "refresh, don't
+    // stack" spirit as Bleed's own refresh in ApplyOnHitStatus, just on the friendly side.
+    public string? RefreshesHotKeyword { get; set; }
+    public int? RefreshesHotDurationTurns { get; set; }
+
     // Dynamic-damage skill: BaseDamage is ignored and the caster's current Shield magnitude is
     // used instead (read at cast time, then the Shield is removed entirely) -- e.g. Shatter.
     public bool DamageEqualsOwnShield { get; set; }

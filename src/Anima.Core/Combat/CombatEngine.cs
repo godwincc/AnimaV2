@@ -110,18 +110,25 @@ public class CombatEngine
 
     private List<ICombatant> InitiativePhase()
     {
-        // TODO: handle Providence-style "always acts first" override
-        //
         // PvE tie-break (no PvP yet, so no need for a fairness-preserving roll): on equal
         // Speed, the player's team always goes first; within a tied team, lower position
         // (1 before 2 before 3) goes first. Fully deterministic — no randomness.
-        return AllCombatants()
-            .Where(c => c.CurrentHp > 0)
-            .OrderByDescending(GetEffectiveSpeed)
+        var alive = AllCombatants().Where(c => c.CurrentHp > 0);
+
+        // Providence: acts first regardless of Speed -- a direct check here rather than an
+        // event subscription, since it's turn-order logic, not a reaction (see CLAUDE.md).
+        // Providence-holders are still ordered amongst themselves (and the rest of the field
+        // amongst themselves) by the same Speed/team/position rule, just as separate groups.
+        return alive
+            .OrderByDescending(HasProvidence)
+            .ThenByDescending(GetEffectiveSpeed)
             .ThenBy(c => c is Enemy) // false (player) sorts before true (enemy)
             .ThenBy(c => c.Position)
             .ToList();
     }
+
+    private static bool HasProvidence(ICombatant combatant) =>
+        combatant is Anima { Crest.Name: "Providence" };
 
     // Frenzy (Crimson): +20% Speed for Initiative purposes while active. Kept separate from the
     // base Speed property (rather than mutating BaseStats.Speed) so the boost cleanly disappears
@@ -456,6 +463,13 @@ public class CombatEngine
             actor.Position = Math.Clamp(actor.Position + selfMoveOffset, 1, 3);
             Log($"  {actor.DisplayName} moves from position {beforePosition} to {actor.Position}.");
         }
+
+        // Bloom (Verdant Sustain kit): a Ranged attack that also refreshes an existing HOT on an
+        // ally, if one is currently active -- see RefreshHotOnAlly.
+        if (skill.RefreshesHotKeyword != null)
+        {
+            RefreshHotOnAlly(friendlyTeam, skill.RefreshesHotKeyword, skill.RefreshesHotDurationTurns ?? 0);
+        }
     }
 
     // Bloodthirst (Crimson): heals 25% of the damage this Anima deals, on every hit.
@@ -584,6 +598,17 @@ public class CombatEngine
 
     private void ResolveHeal(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam, double spiritMultiplier, int weakMagnitude)
     {
+        // Healing Rain (Verdant Sustain kit): instant AoE heal, hits every living ally rather
+        // than a single SelectTarget result.
+        if (skill.Target == TargetType.AllAllies)
+        {
+            foreach (var ally in friendlyTeam.Where(c => c.CurrentHp > 0))
+            {
+                ApplyHeal(actor, ally, skill.BaseHeal, spiritMultiplier, weakMagnitude);
+            }
+            return;
+        }
+
         var target = skill.Target == TargetType.SelfTarget ? actor : SelectTarget(skill.Target, friendlyTeam);
         if (target == null)
         {
@@ -591,12 +616,57 @@ public class CombatEngine
             return;
         }
 
-        ApplyHeal(actor, target, skill.BaseHeal, spiritMultiplier, weakMagnitude);
+        if (skill.BaseHeal > 0)
+        {
+            ApplyHeal(actor, target, skill.BaseHeal, spiritMultiplier, weakMagnitude);
+        }
 
         if (skill.RemovesDebuff)
         {
             RemoveOneDebuff(target);
         }
+
+        // Renew (Verdant Sustain kit): Head skill whose entire effect IS the HOT (BaseHeal is 0),
+        // applied/refreshed on its target here.
+        if (skill.HotKeyword != null)
+        {
+            ApplyOrRefreshHot(target, skill.HotKeyword, skill.HotMagnitude, skill.HotDurationTurns ?? 0);
+        }
+    }
+
+    // Renew-style HOT: refreshes (not stacks) if the target already carries this keyword's HOT,
+    // same "refresh, don't duplicate" idea as Bleed's own refresh in ApplyOnHitStatus.
+    private void ApplyOrRefreshHot(ICombatant target, string keyword, int magnitude, int durationTurns)
+    {
+        if (TryRefreshHot(target, keyword, durationTurns)) return;
+
+        ApplyStatus(target, keyword, magnitude, DurationType.FixedTurn, durationTurns);
+        Log($"  {target.DisplayName} gains {keyword} ({magnitude} healing/turn, {durationTurns} turns).");
+    }
+
+    private bool TryRefreshHot(ICombatant target, string keyword, int durationTurns)
+    {
+        var existing = GetStatus(target, keyword);
+        if (existing == null) return false;
+
+        existing.RemainingTurns = durationTurns;
+        Log($"  {target.DisplayName}'s {keyword} is refreshed ({existing.Magnitude} healing/turn, {durationTurns} turns left).");
+        return true;
+    }
+
+    // Bloom (Verdant Sustain kit): searches the whole friendly team for an existing HOT to
+    // extend -- a no-op (not a fresh application) if nobody currently carries one, since Bloom
+    // is a combo/support piece, not its own HOT source.
+    private void RefreshHotOnAlly(List<ICombatant> friendlyTeam, string keyword, int durationTurns)
+    {
+        var carrier = friendlyTeam.FirstOrDefault(c => c.CurrentHp > 0 && GetStatus(c, keyword) != null);
+        if (carrier == null)
+        {
+            Log($"  No active {keyword} to refresh.");
+            return;
+        }
+
+        TryRefreshHot(carrier, keyword, durationTurns);
     }
 
     // Debuffs eligible for Cleanse-style removal — the negative statuses one Anima can impose
@@ -981,6 +1051,16 @@ public class CombatEngine
                 combatant.CurrentHp = Math.Max(0, combatant.CurrentHp - status.Magnitude);
                 Log($"  {combatant.DisplayName} bleeds for {status.Magnitude} ({combatant.DisplayName} HP: {combatant.CurrentHp}).");
                 PurgeDeadAnimaCards(combatant);
+            }
+
+            // Renew (Verdant Sustain kit): the HOT counterpart to Bleed -- ticks flat healing
+            // (not scaled by any Spirit multiplier, same as Bleed's damage isn't scaled by any
+            // Damage multiplier), capped at MaxHp.
+            if (status.Keyword == "Renew")
+            {
+                var before = combatant.CurrentHp;
+                combatant.CurrentHp = Math.Min(combatant.MaxHp, combatant.CurrentHp + status.Magnitude);
+                Log($"  {combatant.DisplayName} regenerates {combatant.CurrentHp - before} HP from Renew ({combatant.DisplayName} HP: {combatant.CurrentHp}).");
             }
 
             status.RemainingTurns--;

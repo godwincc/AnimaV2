@@ -730,4 +730,84 @@ public static class SampleAnimas
             Position = 1,
         };
     }
+
+    // Verdant Primitive 2 (Sustain). Named "Thicket" -- distinct from its own Tail skill "Bloom",
+    // same Verdant base stats as Sprout, different kit/Archetype.
+    public static AnimaUnit CreateThicket()
+    {
+        var stats = new Stats
+        {
+            MaxHp = 100,
+            Defense = 10,
+            Speed = 10,
+            DamageMultiplier = 0.7,
+            SpiritMultiplier = 1.3,
+        };
+
+        // Entire effect IS the HOT -- BaseHeal is left at 0, so ResolveHeal skips the instant-heal
+        // branch and only applies/refreshes the Renew status. See CombatEngine.ApplyOrRefreshHot.
+        var renew = new Skill
+        {
+            Name = "Renew",
+            Part = Part.Head,
+            Color = AnimaColor.Verdant,
+            Category = SkillCategory.Heal,
+            Target = TargetType.Ally,
+            EnergyCost = 2,
+            HotKeyword = "Renew",
+            HotMagnitude = 13, // flat per-turn healing, not scaled by Spirit -- same convention as Bleed's flat per-turn damage
+            HotDurationTurns = 3,
+        };
+
+        var healingRain = new Skill
+        {
+            Name = "Healing Rain",
+            Part = Part.Frame,
+            Color = AnimaColor.Verdant,
+            Category = SkillCategory.Heal,
+            Target = TargetType.AllAllies,
+            EnergyCost = 2,
+            BaseHeal = 20,
+        };
+
+        var bloom = new Skill
+        {
+            Name = "Bloom",
+            Part = Part.Tail,
+            Color = AnimaColor.Verdant,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Ranged,
+            Target = TargetType.Enemy,
+            EnergyCost = 1,
+            BaseDamage = 8,
+            RefreshesHotKeyword = "Renew", // support/combo piece: extends an ally's existing Renew, doesn't apply a fresh one -- same spirit as Exploit refreshing Bleed
+            RefreshesHotDurationTurns = 3,
+        };
+
+        var providence = new Skill
+        {
+            Name = "Providence",
+            Part = Part.Crest,
+            Color = AnimaColor.Verdant,
+            Category = SkillCategory.Passive,
+            Target = TargetType.SelfTarget,
+            Trigger = TriggerType.PassiveConditional,
+            // Always acts first in Initiative regardless of Speed -- a direct check in
+            // InitiativePhase, not an event subscription, since it's turn-order logic rather
+            // than a reaction. See CombatEngine.HasProvidence.
+        };
+
+        return new AnimaUnit
+        {
+            Id = "Thicket",
+            Color = AnimaColor.Verdant,
+            BaseStats = stats,
+            Head = renew,
+            Frame = healingRain,
+            Tail = bloom,
+            Crest = providence,
+            CurrentHp = stats.MaxHp,
+            Position = 1,
+        };
+    }
 }
