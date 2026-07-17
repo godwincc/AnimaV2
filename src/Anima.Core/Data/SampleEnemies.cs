@@ -111,9 +111,9 @@ public static class SampleEnemies
         return new Enemy
         {
             Name = "The Sentinel",
-            MaxHp = 140,
+            MaxHp = 105, // retuned down from 140 -- Elite fights were running 17-28 rounds, vs. 2-7 for a normal Combat-tier fight
             Defense = 12,
-            CurrentHp = 140,
+            CurrentHp = 105,
             Position = 1,
             Speed = 8,
             // Generous buffer past the round-15 target — only kicks in if the fight is genuinely
@@ -173,9 +173,9 @@ public static class SampleEnemies
         return new Enemy
         {
             Name = "Leech Mother",
-            MaxHp = 160,
+            MaxHp = 115, // retuned down from 160 -- Elite fights were running 17-28 rounds, vs. 2-7 for a normal Combat-tier fight
             Defense = 10,
-            CurrentHp = 160,
+            CurrentHp = 115,
             Position = 1,
             Speed = 6,
             BehaviorRules = new List<EnemyBehaviorRule>
