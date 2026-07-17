@@ -974,4 +974,82 @@ public static class SampleAnimas
             Position = 1,
         };
     }
+
+    // Azure Primitive 3 (Pseudo-Heal). Named "Veil" -- distinct from Shade/Anchor, same Azure
+    // base stats, different kit/Archetype.
+    public static AnimaUnit CreateVeil()
+    {
+        var stats = new Stats
+        {
+            MaxHp = 70,
+            Defense = 10,
+            Speed = 13,
+            DamageMultiplier = 1.0,
+            SpiritMultiplier = 1.0,
+        };
+
+        var deflect = new Skill
+        {
+            Name = "Deflect",
+            Part = Part.Head,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.NA,
+            Target = TargetType.Enemy,
+            EnergyCost = 2,
+            BaseDamage = 15,
+            BaseShield = 12, // flat self-Shield, capped at 50 via GrantShield; see CombatEngine.ResolveAttack
+        };
+
+        var safeguard = new Skill
+        {
+            Name = "Safeguard",
+            Part = Part.Frame,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Buff,
+            Range = AttackRange.NA,
+            Target = TargetType.Ally,
+            EnergyCost = 2,
+            MoveOffset = -1, // moves the TARGET ally forward (toward position 1) -- first Buff skill to move/shield an ally rather than the caster; see CombatEngine.ResolveBuff
+            BaseShield = 15,
+        };
+
+        var ward = new Skill
+        {
+            Name = "Ward",
+            Part = Part.Tail,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Buff,
+            Range = AttackRange.NA,
+            Target = TargetType.AllAllies,
+            EnergyCost = 2, // matches Healing Rain's own AoE-utility precedent
+            BaseShield = 10,
+        };
+
+        var retribution = new Skill
+        {
+            Name = "Retribution",
+            Part = Part.Crest,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Passive,
+            Target = TargetType.SelfTarget,
+            Trigger = TriggerType.PassiveEvent,
+            // When this Anima's own Shield is fully broken (reduced to 0, not just chipped down)
+            // by a hit, applies Weak to whoever broke it -- see CombatEngine.TriggerRetribution
+            // (checked inside ApplyDamage, the engine's shared damage pipeline).
+        };
+
+        return new AnimaUnit
+        {
+            Id = "Veil",
+            Color = AnimaColor.Azure,
+            BaseStats = stats,
+            Head = deflect,
+            Frame = safeguard,
+            Tail = ward,
+            Crest = retribution,
+            CurrentHp = stats.MaxHp,
+            Position = 1,
+        };
+    }
 }

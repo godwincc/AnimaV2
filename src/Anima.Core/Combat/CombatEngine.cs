@@ -417,7 +417,7 @@ public class CombatEngine
 
         var rawInt = (int)Math.Round(raw);
         var multLabel = enrageMultiplier > 1.0 ? $"{damageMultiplier:0.##} mult x {enrageMultiplier:0.##} enrage" : $"{damageMultiplier:0.##} mult";
-        var final = ApplyDamage(target, rawInt, $"{baseDamage} base x {multLabel}");
+        var final = ApplyDamage(target, rawInt, $"{baseDamage} base x {multLabel}", actor);
 
         TriggerReactiveEffects(actor, target, skill);
 
@@ -455,6 +455,16 @@ public class CombatEngine
         {
             var shieldAmount = (int)Math.Round(final * shieldPct);
             var granted = GrantShield(actor, shieldAmount);
+            TriggerInspire(actor, granted, friendlyTeam);
+        }
+
+        // Deflect (Azure Pseudo-Heal kit): a flat self-Shield grant bolted onto an Attack skill --
+        // distinct from SelfShieldPercentOfDamage above (Guard Strike), which scales off the
+        // damage just dealt; this is just BaseShield, the same flat field Buff skills
+        // (Hardened/Fortify) use, routed through the same GrantShield/TriggerInspire pipeline.
+        if (skill.BaseShield > 0)
+        {
+            var granted = GrantShield(actor, skill.BaseShield);
             TriggerInspire(actor, granted, friendlyTeam);
         }
 
@@ -502,8 +512,11 @@ public class CombatEngine
 
     // Shared damage pipeline (Shield absorb, then Defense floor) — used by both direct attacks
     // and reactive counter-damage (Retaliate/Thorns), so counters respect the attacker's own
-    // Shield/Defense rather than being a bypassing special case.
-    private int ApplyDamage(ICombatant target, int rawDamage, string sourceDescription)
+    // Shield/Defense rather than being a bypassing special case. `source` is whoever dealt THIS
+    // particular hit (the original attacker for a direct hit, or the counter-caster for a
+    // Retaliate/Thorns reflection) -- nullable/optional since most callers don't need Retribution
+    // to see it, but ResolveAttack and TriggerReactiveEffects both pass theirs through.
+    private int ApplyDamage(ICombatant target, int rawDamage, string sourceDescription, ICombatant? source = null)
     {
         var remaining = rawDamage;
 
@@ -517,6 +530,7 @@ public class CombatEngine
             if (shield.Magnitude <= 0)
             {
                 target.ActiveStatuses.Remove(shield);
+                TriggerRetribution(target, source);
             }
         }
 
@@ -568,6 +582,21 @@ public class CombatEngine
         PurgeDeadAnimaCards(target);
 
         return final;
+    }
+
+    private const int RetributionWeakMagnitude = 20; // matches Bash/Enfeeble's own Weak magnitude -- no other value specified in the design brief
+
+    // Retribution (Azure Pseudo-Heal kit): when this Anima's own Shield is fully broken (reduced
+    // to 0, not just chipped down) by a hit, applies Weak to whoever broke it. Checked from
+    // inside ApplyDamage's shield-absorption block, which only reaches this line once the
+    // Shield's Magnitude actually hits 0 -- a hit that merely reduces it without exhausting it
+    // never calls this at all, so partial breaks correctly don't trigger Retribution.
+    private void TriggerRetribution(ICombatant target, ICombatant? source)
+    {
+        if (target is not Anima { Crest.Name: "Retribution" } anima || source == null) return;
+
+        ApplyStatus(source, "Weak", RetributionWeakMagnitude, DurationType.UntilConsumed, 0);
+        Log($"  {anima.DisplayName}'s Retribution triggers: {source.DisplayName} is afflicted with Weak ({RetributionWeakMagnitude}%).");
     }
 
     // A dead Anima never takes another turn, so its cards would otherwise sit in Hand/DrawPile/
@@ -636,7 +665,7 @@ public class CombatEngine
             target.ActiveStatuses.Remove(retaliate);
             var retaliateDamage = (int)Math.Round(retaliate.Magnitude * GetOffensiveCrestMultiplier(target));
             Log($"  {target.DisplayName} Retaliates!");
-            ApplyDamage(attacker, retaliateDamage, "Retaliate counter");
+            ApplyDamage(attacker, retaliateDamage, "Retaliate counter", target);
         }
 
         var thorns = GetStatus(target, "Thorns");
@@ -645,7 +674,7 @@ public class CombatEngine
             target.ActiveStatuses.Remove(thorns);
             var thornsDamage = (int)Math.Round(thorns.Magnitude * GetOffensiveCrestMultiplier(target));
             Log($"  {target.DisplayName}'s Thorns triggers!");
-            ApplyDamage(attacker, thornsDamage, "Thorns counter");
+            ApplyDamage(attacker, thornsDamage, "Thorns counter", target);
         }
     }
 
@@ -849,20 +878,43 @@ public class CombatEngine
 
     private void ResolveBuff(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam)
     {
-        // Self-move component, shared by every Buff variant below (Hardened/Charge/Retreat all
-        // pair a self-move with their buff) -- same MoveOffset field ResolveAttack reads for
-        // Lunge, applied here before any of the category-specific branches (which return early).
+        // Ward (Azure Pseudo-Heal kit): instant AoE Shield, hits every living ally rather than a
+        // single SelectTarget result -- same shape as Healing Rain's AoE heal in ResolveHeal.
+        if (skill.Target == TargetType.AllAllies)
+        {
+            foreach (var ally in friendlyTeam.Where(c => c.CurrentHp > 0))
+            {
+                var granted = GrantShield(ally, skill.BaseShield);
+                TriggerInspire(ally, granted, friendlyTeam);
+            }
+            return;
+        }
+
+        // Safeguard (Azure Pseudo-Heal kit): the first Buff skill to target someone OTHER than
+        // its own caster -- `target` resolves to an ally for those, and to `actor` (unchanged
+        // behavior) for every existing SelfTarget Buff skill.
+        var target = skill.Target == TargetType.SelfTarget ? actor : SelectTarget(skill.Target, friendlyTeam);
+        if (target == null)
+        {
+            Log("  No valid target.");
+            return;
+        }
+
+        // Move component, shared by every Buff variant below (Hardened/Charge/Retreat pair a
+        // self-move with their buff; Safeguard moves an ALLY instead) -- same MoveOffset field
+        // ResolveAttack reads for Lunge, applied here before any of the category-specific
+        // branches (which return early).
         if (skill.MoveOffset is int selfMoveOffset)
         {
-            var beforePosition = actor.Position;
-            actor.Position = Math.Clamp(actor.Position + selfMoveOffset, 1, 3);
-            Log($"  {actor.DisplayName} moves from position {beforePosition} to {actor.Position}.");
+            var beforePosition = target.Position;
+            target.Position = Math.Clamp(target.Position + selfMoveOffset, 1, 3);
+            Log($"  {target.DisplayName} moves from position {beforePosition} to {target.Position}.");
         }
 
         if (skill.BaseShield > 0)
         {
-            var granted = GrantShield(actor, skill.BaseShield);
-            TriggerInspire(actor, granted, friendlyTeam);
+            var granted = GrantShield(target, skill.BaseShield);
+            TriggerInspire(target, granted, friendlyTeam);
             return;
         }
 
