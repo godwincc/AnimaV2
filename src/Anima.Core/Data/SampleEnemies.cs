@@ -157,6 +157,15 @@ public static class SampleEnemies
             SelfHealPercentOfDamage = 0.5,
         };
 
+        var spawnBrood = new Skill
+        {
+            Name = "Spawn Brood",
+            Category = SkillCategory.Summon,
+            Target = TargetType.SelfTarget,
+            EnergyCost = 0,
+            SummonFactory = CreateRustlingSwarm,
+        };
+
         return new Enemy
         {
             Name = "Leech Mother",
@@ -167,10 +176,56 @@ public static class SampleEnemies
             Speed = 6,
             BehaviorRules = new List<EnemyBehaviorRule>
             {
+                // Summon a Rustling Swarm add once, on the first turn Leech Mother actually gets
+                // to act at or after Round 5 -- >= rather than == so a Stun/skip landing exactly
+                // on Round 5 doesn't silently eat the trigger forever (this rule is only checked
+                // when ResolveEnemyTurn runs, which a stunned turn skips entirely; found via the
+                // Shade-lockdown matchup, where Leech Mother was stunned on exactly Round 5 in
+                // all 5 test fights and Spawn Brood never fired).
+                new EnemyBehaviorRule
+                {
+                    Condition = (enemy, state) =>
+                        state.RoundNumber >= 5 && enemy.AiState.GetValueOrDefault("HasSummonedBrood") is not true,
+                    Skill = spawnBrood,
+                    OnUsed = enemy => enemy.AiState["HasSummonedBrood"] = true,
+                },
+                new EnemyBehaviorRule
+                {
+                    Condition = (enemy, state) => true, // fallback: always attacks
+                    Skill = drainingClaw,
+                },
+            },
+        };
+    }
+
+    // Lightweight stand-in for Rustling Swarm, summoned by Leech Mother's Spawn Brood.
+    // Speed isn't specified by the design doc for this placeholder -- set to 6 (matching Leech
+    // Mother's own Speed) as a reasonable, clearly-flagged assumption pending real numbers.
+    private static Enemy CreateRustlingSwarm()
+    {
+        var skitterBite = new Skill
+        {
+            Name = "Skitter Bite",
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 0,
+            BaseDamage = 8,
+        };
+
+        return new Enemy
+        {
+            Name = "Rustling Swarm",
+            MaxHp = 20,
+            Defense = 2,
+            CurrentHp = 20,
+            Speed = 6,
+            BehaviorRules = new List<EnemyBehaviorRule>
+            {
                 new EnemyBehaviorRule
                 {
                     Condition = (enemy, state) => true, // always attacks
-                    Skill = drainingClaw,
+                    Skill = skitterBite,
                 },
             },
         };

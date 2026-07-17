@@ -45,7 +45,8 @@ public enum SkillCategory
     Buff,
     Debuff,
     Heal,
-    Passive
+    Passive,
+    Summon
 }
 
 public enum DurationType

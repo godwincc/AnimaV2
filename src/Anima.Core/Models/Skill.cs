@@ -38,4 +38,8 @@ public class Skill
     // Pull/Ally-advance (-1). Distinct from TargetPositionOverride, which is an absolute
     // self-move (e.g. Retreat).
     public int? MoveOffset { get; set; }
+
+    // Summon skills (e.g. Leech Mother's Spawn Brood) add a new combatant mid-fight — narrow
+    // escape hatch, same pattern as the other side-effect fields above.
+    public Func<Enemy>? SummonFactory { get; set; }
 }

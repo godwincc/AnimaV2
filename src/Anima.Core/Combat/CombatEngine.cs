@@ -228,6 +228,9 @@ public class CombatEngine
             case SkillCategory.Heal:
                 ResolveHeal(actor, skill, friendlyTeam, spiritMultiplier, weakMagnitude);
                 break;
+            case SkillCategory.Summon:
+                ResolveSummon(actor, skill);
+                break;
             default:
                 Log($"  ({skill.Category} skills aren't resolved yet.)");
                 break;
@@ -584,6 +587,30 @@ public class CombatEngine
                 Log($"  ({skill.Name} debuff isn't resolved yet.)");
                 break;
         }
+    }
+
+    // Adds a new combatant to the actor's own side mid-fight (e.g. Leech Mother's Spawn Brood).
+    // Enemy-only for now -- no player-side summon skill exists yet. Placed into the first open
+    // position (1-3, front to back); if the side is already full, the summon is skipped rather
+    // than exceeding the normal 3-per-side limit. Added directly to _state.EnemyTeam (not a
+    // team-list copy) so next Round's InitiativePhase -- which re-queries _state.PlayerTeam/
+    // EnemyTeam fresh via AllCombatants() -- picks the new combatant up automatically.
+    private void ResolveSummon(ICombatant actor, Skill skill)
+    {
+        if (skill.SummonFactory == null || actor is not Enemy) return;
+
+        var occupied = _state.EnemyTeam.Where(e => e.CurrentHp > 0).Select(e => e.Position).ToHashSet();
+        var openPosition = Enumerable.Range(1, 3).FirstOrDefault(p => !occupied.Contains(p));
+        if (openPosition == 0)
+        {
+            Log("  No open position for the summon -- skipped.");
+            return;
+        }
+
+        var summon = skill.SummonFactory();
+        summon.Position = openPosition;
+        _state.EnemyTeam.Add(summon);
+        Log($"  {summon.DisplayName} is summoned into position {openPosition}!");
     }
 
     // A team can only have one Marked target at a time -- applying a new Marked (whether via
