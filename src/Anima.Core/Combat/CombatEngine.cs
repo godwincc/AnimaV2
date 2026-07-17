@@ -15,6 +15,8 @@ public class CombatEngine
     private const double AmbushMultiplier = 2.0;
     private const double FrenzyMultiplier = 1.2;
     private const double BloodthirstLifestealPercent = 0.25;
+    private const double SteadyAimMultiplier = 1.15;
+    private const double ExposedMultiplier = 1.25;
 
     // This Round's Initiative order, captured once per Round so Ambush can check whether the
     // acting combatant is literally the last entry in it (see GetOffensiveCrestMultiplier).
@@ -164,12 +166,33 @@ public class CombatEngine
         return true;
     }
 
+    // Melee (1-2) / Ranged (2-3) restrict which positions a skill can be used FROM; a narrower
+    // UsableFromOverride (e.g. Marked Shot's position-3-only) wins when set. The field already
+    // existed on Skill for this, but nothing actually checked it until now.
+    private static bool IsSkillUsableFrom(Skill skill, int position)
+    {
+        if (skill.UsableFromOverride is { Length: > 0 } positions) return positions.Contains(position);
+
+        return skill.Range switch
+        {
+            AttackRange.Melee => position is 1 or 2,
+            AttackRange.Ranged => position is 2 or 3,
+            _ => true,
+        };
+    }
+
     private void ResolvePlayerTurn(Anima anima)
     {
         var skill = ChoosePlayerSkill?.Invoke(anima, _state);
         if (skill == null)
         {
             Log($"{anima.DisplayName} passes.");
+            return;
+        }
+
+        if (!IsSkillUsableFrom(skill, anima.Position))
+        {
+            Log($"{anima.DisplayName} cannot use {skill.Name} from position {anima.Position} -- passes.");
             return;
         }
 
@@ -189,7 +212,8 @@ public class CombatEngine
 
     private void ResolveEnemyTurn(Enemy enemy)
     {
-        var rule = enemy.BehaviorRules.FirstOrDefault(r => (!enemy.IsEnraged || !r.IsDefensive) && r.Condition(enemy, _state));
+        var rule = enemy.BehaviorRules.FirstOrDefault(r =>
+            (!enemy.IsEnraged || !r.IsDefensive) && r.Condition(enemy, _state) && IsSkillUsableFrom(r.Skill, enemy.Position));
         if (rule == null)
         {
             Log($"{enemy.DisplayName} has no valid action.");
@@ -287,6 +311,9 @@ public class CombatEngine
             case "Ambush" when _currentInitiativeOrder.Count > 0 && ReferenceEquals(_currentInitiativeOrder[^1], actor):
                 Log($"  {anima.DisplayName}'s Ambush triggers: damage x{AmbushMultiplier:0.##} (acted last this Round).");
                 return AmbushMultiplier;
+            case "Steady Aim" when anima.Position == 3:
+                Log($"  {anima.DisplayName}'s Steady Aim triggers: damage x{SteadyAimMultiplier:0.##} (position 3).");
+                return SteadyAimMultiplier;
             default:
                 return 1.0;
         }
@@ -428,6 +455,19 @@ public class CombatEngine
             }
         }
 
+        // Exposed (Crimson Ranged kit, Marked Shot): an external vulnerability debuff, +25%
+        // incoming damage. Until-Consumed, consumed here the moment it actually affects a hit --
+        // same "consumed on use" reasoning as Shield/Guarded, since this protects against (well,
+        // worsens) INCOMING damage rather than the target's own next action.
+        var exposed = GetStatus(target, "Exposed");
+        var preExposed = remaining;
+        if (exposed != null && remaining > 0)
+        {
+            remaining = (int)Math.Round(remaining * ExposedMultiplier);
+            target.ActiveStatuses.Remove(exposed);
+            Log($"  {target.DisplayName} is Exposed: incoming damage x{ExposedMultiplier:0.##}.");
+        }
+
         // Courage: a percentage reduction on the target's own side, applied before Defense's
         // flat subtraction (not after) so it stays meaningful even against hits that would
         // otherwise floor out at 1 — a post-Defense percentage cut would round away to nothing.
@@ -439,13 +479,25 @@ public class CombatEngine
             Log($"  {target.DisplayName}'s Courage triggers: incoming damage x{courageMultiplier:0.##} (position 1).");
         }
 
-        var final = remaining > 0 ? Math.Max(remaining - target.Defense, 1) : 0;
+        // Guarded (Crimson Ranged kit, Retreat): a flat, single-hit Defense bonus. Until-Consumed,
+        // consumed here the moment it actually reduces a hit -- same pattern as Shield/Exposed.
+        var guarded = GetStatus(target, "Guarded");
+        var effectiveDefense = target.Defense;
+        if (guarded != null && remaining > 0)
+        {
+            effectiveDefense += guarded.Magnitude;
+            target.ActiveStatuses.Remove(guarded);
+            Log($"  {target.DisplayName}'s Guarded triggers: +{guarded.Magnitude} Defense for this hit.");
+        }
+
+        var final = remaining > 0 ? Math.Max(remaining - effectiveDefense, 1) : 0;
         target.CurrentHp = Math.Max(0, target.CurrentHp - final);
 
         Log($"  Target: {target.DisplayName}");
-        var afterShield = absorbed > 0 ? $"{rawDamage} raw - {absorbed} shield = {preCourage}" : $"{rawDamage} raw";
+        var afterShield = absorbed > 0 ? $"{rawDamage} raw - {absorbed} shield = {preExposed}" : $"{rawDamage} raw";
+        var afterExposed = exposed != null ? $" x{ExposedMultiplier:0.##} Exposed = {preCourage}" : "";
         var afterCourage = courageMultiplier < 1.0 ? $" x{courageMultiplier:0.##} Courage = {remaining}" : "";
-        Log($"  Damage: {sourceDescription} = {afterShield}{afterCourage} - {target.Defense} def = {final} dealt");
+        Log($"  Damage: {sourceDescription} = {afterShield}{afterExposed}{afterCourage} - {effectiveDefense} def = {final} dealt");
         Log($"  {target.DisplayName} HP: {target.CurrentHp}");
 
         PurgeDeadAnimaCards(target);
@@ -580,6 +632,16 @@ public class CombatEngine
 
     private void ResolveBuff(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam)
     {
+        // Self-move component, shared by every Buff variant below (Hardened/Charge/Retreat all
+        // pair a self-move with their buff) -- same MoveOffset field ResolveAttack reads for
+        // Lunge, applied here before any of the category-specific branches (which return early).
+        if (skill.MoveOffset is int selfMoveOffset)
+        {
+            var beforePosition = actor.Position;
+            actor.Position = Math.Clamp(actor.Position + selfMoveOffset, 1, 3);
+            Log($"  {actor.DisplayName} moves from position {beforePosition} to {actor.Position}.");
+        }
+
         if (skill.BaseShield > 0)
         {
             var existingShield = GetStatus(actor, "Shield");
@@ -601,6 +663,17 @@ public class CombatEngine
             // Taunt is "apply Marked to self" -- it shares Marked's underlying status/slot
             // rather than maintaining a separate implementation.
             ApplyMarked(actor, friendlyTeam);
+            return;
+        }
+
+        if (skill.Name == "Retreat")
+        {
+            // Guarded: a flat, single-hit Defense bonus -- Until-Consumed (not Fixed-turn) and
+            // consumed by ApplyDamage the moment it actually reduces an incoming hit, same
+            // reasoning/pattern as Shield rather than Weak/Frenzy (this protects against
+            // INCOMING damage, not the caster's own next outgoing action).
+            ApplyStatus(actor, "Guarded", skill.BuffMagnitude, DurationType.UntilConsumed, 0);
+            Log($"  {actor.DisplayName} gains Guarded (+{skill.BuffMagnitude} Defense for the next hit).");
             return;
         }
 

@@ -41,6 +41,10 @@ public static class SampleAnimas
             Target = TargetType.SelfTarget,
             EnergyCost = 1,
             Duration = DurationType.UntilConsumed,
+            MoveOffset = -1, // move forward 1; now resolved generically by ResolveBuff
+            // Applies a "Charge" status via ResolveBuff's generic fallback, but Primed's actual
+            // x2-damage-on-next-hit effect still isn't wired into damage resolution -- separate,
+            // pre-existing gap, out of scope here.
         };
 
         var execute = new Skill
@@ -116,8 +120,7 @@ public static class SampleAnimas
             EnergyCost = 1,
             BaseShield = 18,
             Duration = DurationType.UntilConsumed,
-            // TODO: the "move forward 1" half isn't resolved yet — relative movement
-            // isn't implemented (same gap as Ember's Charge).
+            MoveOffset = -1, // move forward 1; now resolved generically by ResolveBuff
         };
 
         var taunt = new Skill
@@ -198,6 +201,7 @@ public static class SampleAnimas
             EnergyCost = 1,
             BaseShield = 18,
             Duration = DurationType.UntilConsumed,
+            MoveOffset = -1, // move forward 1; now resolved generically by ResolveBuff
         };
 
         var cleanse = new Skill
@@ -475,6 +479,94 @@ public static class SampleAnimas
             Frame = lunge,
             Tail = frenzy,
             Crest = bloodthirst,
+            CurrentHp = stats.MaxHp,
+            Position = 1,
+        };
+    }
+
+    // Crimson Primitive 3 (Ranged). Named "Marksman" -- distinct from Ember/Reaper, same
+    // Crimson base stats, different kit/Archetype.
+    public static AnimaUnit CreateMarksman()
+    {
+        var stats = new Stats
+        {
+            MaxHp = 100,
+            Defense = 7,
+            Speed = 10,
+            DamageMultiplier = 1.3,
+            SpiritMultiplier = 0.7,
+        };
+
+        var snipe = new Skill
+        {
+            Name = "Snipe",
+            Part = Part.Head,
+            Color = AnimaColor.Crimson,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Ranged,
+            Target = TargetType.Enemy,
+            EnergyCost = 2,
+            BaseDamage = 22,
+        };
+
+        var retreat = new Skill
+        {
+            Name = "Retreat",
+            Part = Part.Frame,
+            Color = AnimaColor.Crimson,
+            Category = SkillCategory.Buff,
+            Range = AttackRange.NA,
+            Target = TargetType.SelfTarget,
+            EnergyCost = 1,
+            MoveOffset = 1, // backward = toward position 3
+            BuffMagnitude = 8, // Guarded's flat Defense bonus; matches Courage's rough magnitude. See CombatEngine.ResolveBuff / ApplyDamage.
+        };
+
+        // "usable from position 3 only" is narrower than Ranged's normal 2-3 -- UsableFromOverride
+        // wins over Range in CombatEngine.IsSkillUsableFrom.
+        var markedShot = new Skill
+        {
+            Name = "Marked Shot",
+            Part = Part.Tail,
+            Color = AnimaColor.Crimson,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Ranged,
+            UsableFromOverride = new[] { 3 },
+            // The design note said "targets Chosen Any", but Marked Shot needs to hit an ENEMY
+            // (Exposed only makes sense on a target ally attacks can then pile onto) --
+            // TargetType.ChosenAny is actually the ALLY-side "any position" type in this engine
+            // (see IsFriendlyTargetType); ChosenEnemy is the enemy-side equivalent Misdirect
+            // already uses for the same "any position" reasoning. Using ChosenAny here would
+            // debuff a teammate, so this uses ChosenEnemy instead.
+            Target = TargetType.ChosenEnemy,
+            EnergyCost = 2,
+            BaseDamage = 15,
+            OnHitStatusKeyword = "Exposed",
+            OnHitStatusDuration = DurationType.UntilConsumed,
+            // Until-Consumed, not Fixed-turn:1 -- consumed by ApplyDamage the moment it actually
+            // affects an incoming hit, same reasoning as Weak/Guarded/Shield.
+        };
+
+        var steadyAim = new Skill
+        {
+            Name = "Steady Aim",
+            Part = Part.Crest,
+            Color = AnimaColor.Crimson,
+            Category = SkillCategory.Passive,
+            Target = TargetType.SelfTarget,
+            Trigger = TriggerType.PassiveConditional,
+            // +15% damage while in position 3 -- see CombatEngine.GetOffensiveCrestMultiplier.
+        };
+
+        return new AnimaUnit
+        {
+            Id = "Marksman",
+            Color = AnimaColor.Crimson,
+            BaseStats = stats,
+            Head = snipe,
+            Frame = retreat,
+            Tail = markedShot,
+            Crest = steadyAim,
             CurrentHp = stats.MaxHp,
             Position = 1,
         };
