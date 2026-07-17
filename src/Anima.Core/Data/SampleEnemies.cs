@@ -157,6 +157,9 @@ public static class SampleEnemies
             SelfHealPercentOfDamage = 0.5,
         };
 
+        // Guard-style summon: Rustling Swarm takes position 1 and Leech Mother is pushed back
+        // to position 2, so default front-only targeting hits the add instead of her -- the
+        // add actually screens the real threat, rather than just adding a second damage source.
         var spawnBrood = new Skill
         {
             Name = "Spawn Brood",
@@ -164,6 +167,7 @@ public static class SampleEnemies
             Target = TargetType.SelfTarget,
             EnergyCost = 0,
             SummonFactory = CreateRustlingSwarm,
+            SummonInFront = true,
         };
 
         return new Enemy

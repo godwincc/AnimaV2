@@ -42,4 +42,8 @@ public class Skill
     // Summon skills (e.g. Leech Mother's Spawn Brood) add a new combatant mid-fight — narrow
     // escape hatch, same pattern as the other side-effect fields above.
     public Func<Enemy>? SummonFactory { get; set; }
+
+    // Guard-style summon: the new combatant takes position 1, pushing the caster back to the
+    // next open position, instead of the summon just filling the first open slot behind them.
+    public bool SummonInFront { get; set; }
 }
