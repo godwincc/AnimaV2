@@ -104,7 +104,7 @@ public static class SampleAnimas
             Range = AttackRange.Melee,
             Target = TargetType.Enemy,
             EnergyCost = 2,
-            BaseDamage = 18, // +40% Increase Effect augment (13 -> 18), earned mid-run
+            BaseDamage = 13,
             OnHitStatusKeyword = "Weak",
             OnHitStatusMagnitude = 20,
             OnHitStatusDuration = DurationType.UntilConsumed, // consumed by the target's next skill, not a Round tick
@@ -185,7 +185,7 @@ public static class SampleAnimas
             Range = AttackRange.Melee,
             Target = TargetType.Enemy,
             EnergyCost = 2,
-            BaseDamage = 18, // +40% Increase Effect augment (13 -> 18), earned mid-run
+            BaseDamage = 13,
             OnHitStatusKeyword = "Weak",
             OnHitStatusMagnitude = 20,
             OnHitStatusDuration = DurationType.UntilConsumed,
@@ -262,7 +262,7 @@ public static class SampleAnimas
             Range = AttackRange.Ranged,
             Target = TargetType.Enemy,
             EnergyCost = 2,
-            BaseDamage = 14, // +40% Increase Effect augment (10 -> 14), earned mid-run
+            BaseDamage = 10,
             BaseHeal = 26,
             SecondaryTarget = TargetType.LowestHpAlly,
         };
