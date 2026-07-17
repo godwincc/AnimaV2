@@ -154,7 +154,7 @@ public static class SampleEnemies
             Target = TargetType.Enemy,
             EnergyCost = 0,
             BaseDamage = 20,
-            SelfHealPercentOfDamage = 0.5,
+            SelfHealPercentOfDamage = 0.3, // retuned down from 0.5 -- fight length tuning
         };
 
         // Guard-style summon: Rustling Swarm takes position 1 and Leech Mother is pushed back
