@@ -479,6 +479,15 @@ public class CombatEngine
             Log($"  {actor.DisplayName} moves from position {beforePosition} to {actor.Position}.");
         }
 
+        // Shove (Azure Pseudo-Tank kit): shifts the ATTACK'S TARGET instead of the caster --
+        // distinct from MoveOffset above, which Lunge uses to move the caster itself.
+        if (skill.TargetMoveOffset is int targetMoveOffset)
+        {
+            var beforeTargetPosition = target.Position;
+            target.Position = Math.Clamp(target.Position + targetMoveOffset, 1, 3);
+            Log($"  {target.DisplayName} is shoved from position {beforeTargetPosition} to {target.Position}.");
+        }
+
         // Bloom (Verdant Sustain kit): a Ranged attack that also refreshes an existing HOT on an
         // ally, if one is currently active -- see RefreshHotOnAlly.
         if (skill.RefreshesHotKeyword != null)
@@ -568,14 +577,43 @@ public class CombatEngine
     {
         if (combatant is not Anima anima || anima.CurrentHp > 0) return;
 
+        // A card only ever moves between Hand/DrawPile/DiscardPile -- it's never removed except
+        // here -- so every one of this Anima's 9 cards is guaranteed to still be somewhere in
+        // one of those three piles the FIRST time this runs for them, and guaranteed gone every
+        // time after. That conservation invariant makes this an exact "has this Anima's death
+        // already been processed?" check -- the gate both PurgeDeadAnimaCards' own log message
+        // and TriggerLastLaugh below need to fire exactly once per death.
         var deckSkills = anima.DeckSkills;
-        var removed = _state.Hand.RemoveAll(s => deckSkills.Contains(s))
-            + _state.DrawPile.RemoveAll(s => deckSkills.Contains(s))
-            + _state.DiscardPile.RemoveAll(s => deckSkills.Contains(s));
+        var stillInDeck = _state.Hand.Any(s => deckSkills.Contains(s))
+            || _state.DrawPile.Any(s => deckSkills.Contains(s))
+            || _state.DiscardPile.Any(s => deckSkills.Contains(s));
+        if (!stillInDeck) return;
 
-        if (removed > 0)
+        _state.Hand.RemoveAll(s => deckSkills.Contains(s));
+        _state.DrawPile.RemoveAll(s => deckSkills.Contains(s));
+        _state.DiscardPile.RemoveAll(s => deckSkills.Contains(s));
+
+        Log($"  {anima.DisplayName} has fallen — their remaining cards are removed from the deck.");
+        TriggerLastLaugh(anima);
+    }
+
+    private const int BleedDurationTurns = 3; // matches Exploit/Rend's own Bleed application -- the "full" value Last Laugh refreshes back to
+
+    // Last Laugh (Azure Pseudo-Tank kit): on this Anima's death, refreshes every currently-active
+    // debuff on the enemy team back to full. In practice this only has a visible effect on Bleed
+    // (the only FixedTurn debuff in the game so far) -- Weak/Marked are Until-Consumed, so
+    // they're already "full" for as long as they're active; there's no decayed state to restore.
+    private void TriggerLastLaugh(Anima fallenAnima)
+    {
+        if (fallenAnima.Crest.Name != "Last Laugh") return;
+
+        foreach (var enemy in _state.EnemyTeam.Where(e => e.CurrentHp > 0))
         {
-            Log($"  {anima.DisplayName} has fallen — their remaining cards are removed from the deck.");
+            foreach (var status in enemy.ActiveStatuses.Where(s => DebuffKeywords.Contains(s.Keyword) && s.Duration == DurationType.FixedTurn))
+            {
+                status.RemainingTurns = BleedDurationTurns;
+                Log($"  {fallenAnima.DisplayName}'s Last Laugh triggers: {enemy.DisplayName}'s {status.Keyword} is refreshed ({status.RemainingTurns} turns left).");
+            }
         }
     }
 

@@ -894,4 +894,84 @@ public static class SampleAnimas
             Position = 1,
         };
     }
+
+    // Azure Primitive 2 (Pseudo-Tank). Named "Anchor" -- distinct from Shade, same Azure base
+    // stats, different kit/Archetype.
+    public static AnimaUnit CreateAnchor()
+    {
+        var stats = new Stats
+        {
+            MaxHp = 70,
+            Defense = 10,
+            Speed = 13,
+            DamageMultiplier = 1.0,
+            SpiritMultiplier = 1.0,
+        };
+
+        var shove = new Skill
+        {
+            Name = "Shove",
+            Part = Part.Head,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.NA,
+            Target = TargetType.Enemy,
+            EnergyCost = 2,
+            BaseDamage = 15,
+            TargetMoveOffset = 1, // pushes the target BACK (toward position 3); see CombatEngine.ResolveAttack
+        };
+
+        var enfeeble = new Skill
+        {
+            Name = "Enfeeble",
+            Part = Part.Frame,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.NA,
+            Target = TargetType.ChosenEnemy,
+            EnergyCost = 2,
+            BaseDamage = 10,
+            OnHitStatusKeyword = "Weak",
+            OnHitStatusMagnitude = 20, // matches Bash's Weak magnitude -- no other value specified in the design brief
+            OnHitStatusDuration = DurationType.UntilConsumed,
+        };
+
+        var hook = new Skill
+        {
+            Name = "Hook",
+            Part = Part.Tail,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Move,
+            Range = AttackRange.NA,
+            Target = TargetType.ChosenEnemy,
+            EnergyCost = 2,
+            MoveOffset = -1, // pulls the target FORWARD (toward position 1); resolved generically by ResolveMove -- no damage, Category.Move rather than Attack
+        };
+
+        var lastLaugh = new Skill
+        {
+            Name = "Last Laugh",
+            Part = Part.Crest,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Passive,
+            Target = TargetType.SelfTarget,
+            Trigger = TriggerType.PassiveEvent,
+            // On this Anima's death, refreshes every currently-active debuff on the enemy team
+            // back to full -- see CombatEngine.TriggerLastLaugh (called from PurgeDeadAnimaCards,
+            // the engine's existing "an Anima has just died" checkpoint).
+        };
+
+        return new AnimaUnit
+        {
+            Id = "Anchor",
+            Color = AnimaColor.Azure,
+            BaseStats = stats,
+            Head = shove,
+            Frame = enfeeble,
+            Tail = hook,
+            Crest = lastLaugh,
+            CurrentHp = stats.MaxHp,
+            Position = 1,
+        };
+    }
 }

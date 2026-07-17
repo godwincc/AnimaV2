@@ -52,10 +52,13 @@ public class Skill
     // Magnitude for non-Shield self-Buff skills (e.g. Retaliate/Thorns counter-damage amount).
     public int BuffMagnitude { get; set; }
 
-    // Relative position shift applied to skill.Target, clamped to [1,3] — e.g. Push (+1),
-    // Pull/Ally-advance (-1). Distinct from TargetPositionOverride, which is an absolute
-    // self-move (e.g. Retreat).
+    // Relative position shift, clamped to [1,3]. On a Move-category skill this shifts
+    // skill.Target itself (e.g. Hook's Pull, -1). On an Attack-category skill it instead shifts
+    // the ACTOR (e.g. Lunge moving itself forward) — distinct from TargetPositionOverride, which
+    // is an absolute self-move (e.g. Retreat), and from TargetMoveOffset below, which shifts an
+    // Attack skill's own target rather than its caster (e.g. Shove's Push, +1).
     public int? MoveOffset { get; set; }
+    public int? TargetMoveOffset { get; set; }
 
     // Summon skills (e.g. Leech Mother's Spawn Brood) add a new combatant mid-fight — narrow
     // escape hatch, same pattern as the other side-effect fields above.
