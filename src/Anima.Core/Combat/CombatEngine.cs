@@ -558,18 +558,27 @@ public class CombatEngine
         if (skill.Range != AttackRange.Melee) return;
         if (target.CurrentHp <= 0) return;
 
+        // Retaliate/Thorns counters route through GetOffensiveCrestMultiplier the same as a
+        // normal attack -- so Vengeance (and any future offense-boosting crest) applies to
+        // reactive counter-damage too, not just direct attacks. Enrage is deliberately NOT
+        // applied here (it's ResolveAttack's own separate multiplier) -- no current enemy has
+        // both Enrage and Retaliate/Thorns, so it hasn't come up.
         var retaliate = GetStatus(target, "Retaliate");
         if (retaliate != null)
         {
+            target.ActiveStatuses.Remove(retaliate);
+            var retaliateDamage = (int)Math.Round(retaliate.Magnitude * GetOffensiveCrestMultiplier(target));
             Log($"  {target.DisplayName} Retaliates!");
-            ApplyDamage(attacker, retaliate.Magnitude, "Retaliate counter");
+            ApplyDamage(attacker, retaliateDamage, "Retaliate counter");
         }
 
         var thorns = GetStatus(target, "Thorns");
         if (thorns != null)
         {
+            target.ActiveStatuses.Remove(thorns);
+            var thornsDamage = (int)Math.Round(thorns.Magnitude * GetOffensiveCrestMultiplier(target));
             Log($"  {target.DisplayName}'s Thorns triggers!");
-            ApplyDamage(attacker, thorns.Magnitude, "Thorns counter");
+            ApplyDamage(attacker, thornsDamage, "Thorns counter");
         }
     }
 
@@ -740,8 +749,22 @@ public class CombatEngine
             return;
         }
 
+        if (skill.Name is "Intercept" or "Bristle")
+        {
+            // Retaliate/Thorns: Until-Consumed (not Fixed-turn), consumed by TriggerReactiveEffects
+            // the moment they actually fire a counter -- same "next incoming hit" reasoning as
+            // Guarded/Exposed. A Fixed-turn:1 duration (as the design doc's status table literally
+            // says) would tick away at the very next Round Start, before a slower Onyx bearer's
+            // reactive counter ever got a chance to matter against a faster attacker -- the same
+            // class of timing bug already found for Weak and Taunt/Marked, just never triggered
+            // before now since no sample Anima had used Retaliate/Thorns until this kit.
+            var keyword = skill.Name == "Intercept" ? "Retaliate" : "Thorns";
+            ApplyStatus(actor, keyword, skill.BuffMagnitude, DurationType.UntilConsumed, 0);
+            Log($"  {actor.DisplayName} gains {keyword} ({skill.BuffMagnitude}).");
+            return;
+        }
+
         // Simplification: a non-Shield Buff skill applies a status named after itself to its caster.
-        // BuffMagnitude carries a value for statuses that need one (e.g. Retaliate/Thorns counter amount).
         ApplyStatus(actor, skill.Name, skill.BuffMagnitude, skill.Duration, skill.DurationTurns ?? 0);
         Log(skill.BuffMagnitude > 0
             ? $"  {actor.DisplayName} gains {skill.Name} ({skill.BuffMagnitude})."
@@ -767,7 +790,7 @@ public class CombatEngine
 
         switch (skill.Name)
         {
-            case "Pin":
+            case "Pin" or "Disarm":
                 ApplyStatus(target, "Stunned", 0, DurationType.UntilConsumed, 0);
                 Log($"  {target.DisplayName} is Stunned.");
                 break;

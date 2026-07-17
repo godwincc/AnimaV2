@@ -649,4 +649,85 @@ public static class SampleAnimas
             Position = 1,
         };
     }
+
+    // Onyx Primitive 3 (Reactive). Named "Warden" -- distinct from Boulder and Aegis, same Onyx
+    // base stats, different kit/Archetype.
+    public static AnimaUnit CreateWarden()
+    {
+        var stats = new Stats
+        {
+            MaxHp = 130,
+            Defense = 13,
+            Speed = 7,
+            DamageMultiplier = 1.0,
+            SpiritMultiplier = 0.8,
+        };
+
+        // "Position 2 only" (UsableFromOverride) guarantees moving to position 1 is always a
+        // -1 relative shift, so this reuses the same MoveOffset field Lunge/Retreat use rather
+        // than needing an absolute TargetPositionOverride move.
+        var intercept = new Skill
+        {
+            Name = "Intercept",
+            Part = Part.Head,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Buff,
+            Range = AttackRange.Melee,
+            UsableFromOverride = new[] { 2 },
+            Target = TargetType.SelfTarget,
+            EnergyCost = 2,
+            MoveOffset = -1,
+            BuffMagnitude = 20, // Retaliate's flat counter-damage; see CombatEngine.ResolveBuff
+        };
+
+        var bristle = new Skill
+        {
+            Name = "Bristle",
+            Part = Part.Frame,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Buff,
+            Range = AttackRange.NA,
+            Target = TargetType.SelfTarget,
+            EnergyCost = 1,
+            BuffMagnitude = 12, // Thorns' flat counter-damage; see CombatEngine.ResolveBuff
+        };
+
+        var disarm = new Skill
+        {
+            Name = "Disarm",
+            Part = Part.Tail,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Debuff,
+            Range = AttackRange.NA,
+            Target = TargetType.ChosenEnemy,
+            EnergyCost = 1,
+            // PvE stand-in for disabling the target's Head ability: stuns the target for their
+            // next turn, same mechanism as Azure's Pin -- see CombatEngine.ResolveDebuff.
+        };
+
+        var vengeance = new Skill
+        {
+            Name = "Vengeance",
+            Part = Part.Crest,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Passive,
+            Target = TargetType.SelfTarget,
+            Trigger = TriggerType.PassiveConditional,
+            // +25% damage dealt while this Anima's own HP is below 50% -- already handled
+            // generically alongside Reckless in CombatEngine.GetOffensiveCrestMultiplier.
+        };
+
+        return new AnimaUnit
+        {
+            Id = "Warden",
+            Color = AnimaColor.Onyx,
+            BaseStats = stats,
+            Head = intercept,
+            Frame = bristle,
+            Tail = disarm,
+            Crest = vengeance,
+            CurrentHp = stats.MaxHp,
+            Position = 1,
+        };
+    }
 }
