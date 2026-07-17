@@ -29,7 +29,12 @@ public class Skill
     public int? OnHitStatusDurationTurns { get; set; }
     public TargetType? SecondaryTarget { get; set; } // e.g. Smite healing LowestHpAlly alongside its Enemy attack target
     public double? SelfHealPercentOfDamage { get; set; } // e.g. Leech Mother's Draining Claw
+    public double? SelfShieldPercentOfDamage { get; set; } // e.g. Guard Strike: Shield equal to damage dealt
     public bool RemovesDebuff { get; set; } // e.g. Cleanse: heal + strip one debuff from its target
+
+    // Dynamic-damage skill: BaseDamage is ignored and the caster's current Shield magnitude is
+    // used instead (read at cast time, then the Shield is removed entirely) -- e.g. Shatter.
+    public bool DamageEqualsOwnShield { get; set; }
 
     // Magnitude for non-Shield self-Buff skills (e.g. Retaliate/Thorns counter-damage amount).
     public int BuffMagnitude { get; set; }

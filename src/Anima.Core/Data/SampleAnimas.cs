@@ -571,4 +571,82 @@ public static class SampleAnimas
             Position = 1,
         };
     }
+
+    // Onyx Primitive 2 (Bulwark/Shield). Named "Aegis" -- distinct from Boulder and the Bastion
+    // test hybrid, same Onyx base stats, different kit/Archetype.
+    public static AnimaUnit CreateAegis()
+    {
+        var stats = new Stats
+        {
+            MaxHp = 130,
+            Defense = 13,
+            Speed = 7,
+            DamageMultiplier = 1.0,
+            SpiritMultiplier = 0.8,
+        };
+
+        var guardStrike = new Skill
+        {
+            Name = "Guard Strike",
+            Part = Part.Head,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 2,
+            BaseDamage = 15,
+            SelfShieldPercentOfDamage = 1.0, // Shield equal to 100% of damage dealt; still capped at 50 via GrantShield
+        };
+
+        var fortify = new Skill
+        {
+            Name = "Fortify",
+            Part = Part.Frame,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Buff,
+            Range = AttackRange.NA,
+            Target = TargetType.SelfTarget,
+            EnergyCost = 2,
+            BaseShield = 32,
+            Duration = DurationType.UntilConsumed,
+            // No MoveOffset -- unlike Hardened/Retreat, Fortify is explicitly stationary.
+        };
+
+        var shatter = new Skill
+        {
+            Name = "Shatter",
+            Part = Part.Tail,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.NA,
+            Target = TargetType.Enemy,
+            EnergyCost = 3,
+            DamageEqualsOwnShield = true, // BaseDamage unused; see CombatEngine.ResolveAttack
+        };
+
+        var inspire = new Skill
+        {
+            Name = "Inspire",
+            Part = Part.Crest,
+            Color = AnimaColor.Onyx,
+            Category = SkillCategory.Passive,
+            Target = TargetType.SelfTarget,
+            Trigger = TriggerType.PassiveEvent,
+            // Whenever this Anima gains Shield (any source), all other living allies gain 30% of
+            // the amount granted -- see CombatEngine.TriggerInspire.
+        };
+
+        return new AnimaUnit
+        {
+            Id = "Aegis",
+            Color = AnimaColor.Onyx,
+            BaseStats = stats,
+            Head = guardStrike,
+            Frame = fortify,
+            Tail = shatter,
+            Crest = inspire,
+            CurrentHp = stats.MaxHp,
+            Position = 1,
+        };
+    }
 }

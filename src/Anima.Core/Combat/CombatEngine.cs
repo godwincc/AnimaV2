@@ -17,6 +17,7 @@ public class CombatEngine
     private const double BloodthirstLifestealPercent = 0.25;
     private const double SteadyAimMultiplier = 1.15;
     private const double ExposedMultiplier = 1.25;
+    private const double InspireSharePercent = 0.3;
 
     // This Round's Initiative order, captured once per Round so Ambush can check whether the
     // acting combatant is literally the last entry in it (see GetOffensiveCrestMultiplier).
@@ -362,8 +363,24 @@ public class CombatEngine
             ConsumeMarked(target);
         }
 
+        // Shatter (Onyx Bulwark kit): BaseDamage is ignored -- damage instead equals the caster's
+        // current Shield magnitude, read at cast time, with the Shield then removed entirely
+        // (not just consumed by absorption). Dynamic-damage skills read their source status BEFORE
+        // the normal multiplier chain runs, same as any other skill's BaseDamage would.
+        var baseDamage = skill.BaseDamage;
+        if (skill.DamageEqualsOwnShield)
+        {
+            var ownShield = GetStatus(actor, "Shield");
+            baseDamage = ownShield?.Magnitude ?? 0;
+            if (ownShield != null)
+            {
+                actor.ActiveStatuses.Remove(ownShield);
+                Log($"  {actor.DisplayName}'s Shield ({baseDamage}) is consumed by {skill.Name}.");
+            }
+        }
+
         var enrageMultiplier = actor is Enemy { IsEnraged: true } enragedEnemy ? enragedEnemy.EnrageDamageMultiplier : 1.0;
-        var raw = skill.BaseDamage * damageMultiplier * enrageMultiplier;
+        var raw = baseDamage * damageMultiplier * enrageMultiplier;
 
         // Self modifiers (Reckless/Vengeance, Frenzy, and eventually Primed) apply first;
         // opponent-applied debuffs (Weak) apply last — same multiplier chain, self before opponent.
@@ -383,7 +400,7 @@ public class CombatEngine
 
         var rawInt = (int)Math.Round(raw);
         var multLabel = enrageMultiplier > 1.0 ? $"{damageMultiplier:0.##} mult x {enrageMultiplier:0.##} enrage" : $"{damageMultiplier:0.##} mult";
-        var final = ApplyDamage(target, rawInt, $"{skill.BaseDamage} base x {multLabel}");
+        var final = ApplyDamage(target, rawInt, $"{baseDamage} base x {multLabel}");
 
         TriggerReactiveEffects(actor, target, skill);
 
@@ -407,6 +424,16 @@ public class CombatEngine
             var before = actor.CurrentHp;
             actor.CurrentHp = Math.Min(actor.CurrentHp + healAmount, actor.MaxHp);
             Log($"  {actor.DisplayName} drains {actor.CurrentHp - before} HP from the hit ({actor.DisplayName} HP: {actor.CurrentHp}).");
+        }
+
+        // Guard Strike (Onyx Bulwark kit): grants Shield equal to a percentage of damage dealt --
+        // routes through the same GrantShield/TriggerInspire pipeline as any other Shield source,
+        // so Inspire triggers off this too.
+        if (skill.SelfShieldPercentOfDamage is double shieldPct && final > 0)
+        {
+            var shieldAmount = (int)Math.Round(final * shieldPct);
+            var granted = GrantShield(actor, shieldAmount);
+            TriggerInspire(actor, granted, friendlyTeam);
         }
 
         // Bloodthirst (Crimson): unlike SelfHealPercentOfDamage above (a per-skill effect, e.g.
@@ -630,6 +657,51 @@ public class CombatEngine
 
     private const int MaxShieldMagnitude = 50;
 
+    // Grants Shield to a target, stacking additively onto any existing Shield (capped at 50) --
+    // shared by ResolveBuff's BaseShield skills (Hardened/Fortify), Guard Strike's
+    // damage-dealt Shield, and Inspire's ally-share. Returns the actual amount added, which may
+    // be less than requested once the cap is hit.
+    private int GrantShield(ICombatant target, int amount)
+    {
+        if (amount <= 0) return 0;
+
+        var existing = GetStatus(target, "Shield");
+        if (existing != null)
+        {
+            var before = existing.Magnitude;
+            existing.Magnitude = Math.Min(existing.Magnitude + amount, MaxShieldMagnitude);
+            var added = existing.Magnitude - before;
+            Log($"  {target.DisplayName} gains {added} Shield (now {existing.Magnitude}).");
+            return added;
+        }
+
+        var granted = Math.Min(amount, MaxShieldMagnitude);
+        ApplyStatus(target, "Shield", granted, DurationType.UntilConsumed, 0);
+        Log($"  {target.DisplayName} gains {granted} Shield.");
+        return granted;
+    }
+
+    // Inspire (Onyx Bulwark kit): whenever this Anima gains Shield (from any source), all OTHER
+    // living allies gain 30% of the actual (post-cap) amount just granted. Shares via GrantShield
+    // directly rather than this wrapper, so a hypothetical second Inspire-bearer on the same team
+    // wouldn't chain-trigger off their own shared amount.
+    private void TriggerInspire(ICombatant actor, int shieldGranted, List<ICombatant> friendlyTeam)
+    {
+        if (actor is not Anima anima || anima.Crest.Name != "Inspire" || shieldGranted <= 0) return;
+
+        var shareAmount = (int)Math.Round(shieldGranted * InspireSharePercent);
+        if (shareAmount <= 0) return;
+
+        foreach (var ally in friendlyTeam.Where(a => a.CurrentHp > 0 && !ReferenceEquals(a, actor)))
+        {
+            var allyGranted = GrantShield(ally, shareAmount);
+            if (allyGranted > 0)
+            {
+                Log($"  {anima.DisplayName}'s Inspire triggers: {ally.DisplayName} shares in the Shield.");
+            }
+        }
+    }
+
     private void ResolveBuff(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam)
     {
         // Self-move component, shared by every Buff variant below (Hardened/Charge/Retreat all
@@ -644,17 +716,8 @@ public class CombatEngine
 
         if (skill.BaseShield > 0)
         {
-            var existingShield = GetStatus(actor, "Shield");
-            if (existingShield != null)
-            {
-                existingShield.Magnitude = Math.Min(existingShield.Magnitude + skill.BaseShield, MaxShieldMagnitude);
-                Log($"  {actor.DisplayName} gains {skill.BaseShield} Shield (now {existingShield.Magnitude}).");
-            }
-            else
-            {
-                ApplyStatus(actor, "Shield", Math.Min(skill.BaseShield, MaxShieldMagnitude), skill.Duration, skill.DurationTurns ?? 0);
-                Log($"  {actor.DisplayName} gains {skill.BaseShield} Shield.");
-            }
+            var granted = GrantShield(actor, skill.BaseShield);
+            TriggerInspire(actor, granted, friendlyTeam);
             return;
         }
 
