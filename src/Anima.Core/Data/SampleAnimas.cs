@@ -310,4 +310,90 @@ public static class SampleAnimas
             Position = 1,
         };
     }
+
+    // Azure Primitive 1 (Rogue/Debuffer). Named "Shade" rather than "Wisp" to avoid colliding
+    // with the (planned, not yet coded) Wisp Charm run-scoped artifact.
+    public static AnimaUnit CreateShade()
+    {
+        var stats = new Stats
+        {
+            MaxHp = 70,
+            Defense = 10,
+            Speed = 13,
+            DamageMultiplier = 1.0,
+            SpiritMultiplier = 1.0,
+        };
+
+        var pin = new Skill
+        {
+            Name = "Pin",
+            Part = Part.Head,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Debuff,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 1,
+            // No damage -- PvE behavior stands in for the PvP "disable Tail" effect: stuns the
+            // target, skipping its next turn entirely. See CombatEngine.ResolveDebuff.
+        };
+
+        var exploit = new Skill
+        {
+            Name = "Exploit",
+            Part = Part.Frame,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 1,
+            BaseDamage = 8,
+            OnHitStatusKeyword = "Bleed",
+            OnHitStatusMagnitude = 5, // small DOT tick -- exact value not spec'd, chosen small relative to Exploit's own 8 base
+            OnHitStatusDuration = DurationType.FixedTurn,
+            OnHitStatusDurationTurns = 3,
+        };
+
+        var misdirect = new Skill
+        {
+            Name = "Misdirect",
+            Part = Part.Tail,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Debuff,
+            // ChosenEnemy, not Enemy: TargetType.Enemy's SelectTarget gives Marked-holders
+            // targeting priority, which would make Misdirect always re-select whichever enemy
+            // is ALREADY Marked -- unable to ever redirect Marked onto a different target. Found
+            // via the standalone sanity check. ChosenEnemy skips that priority (stands in for a
+            // real player-chosen target, same idea as Execute's LowestHpEnemy).
+            Target = TargetType.ChosenEnemy,
+            EnergyCost = 2,
+            // Applies Marked to its target via the unified Marked mechanism (single-slot per
+            // team, Until-Consumed) -- overrides any existing Marked, including a self-applied
+            // Taunt. See CombatEngine.ResolveDebuff / ApplyMarked.
+        };
+
+        var ambush = new Skill
+        {
+            Name = "Ambush",
+            Part = Part.Crest,
+            Color = AnimaColor.Azure,
+            Category = SkillCategory.Passive,
+            Target = TargetType.SelfTarget,
+            Trigger = TriggerType.PassiveConditional,
+            // Double damage when this Anima acts LAST in the Round's Initiative order --
+            // see CombatEngine.GetOffensiveCrestMultiplier.
+        };
+
+        return new AnimaUnit
+        {
+            Id = "Shade",
+            Color = AnimaColor.Azure,
+            BaseStats = stats,
+            Head = pin,
+            Frame = exploit,
+            Tail = misdirect,
+            Crest = ambush,
+            CurrentHp = stats.MaxHp,
+            Position = 1,
+        };
+    }
 }

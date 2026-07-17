@@ -12,6 +12,11 @@ public class CombatEngine
     private const int CopiesPerSkill = 3;
     private const double CrestConditionalMultiplier = 1.25;
     private const double CourageDamageReduction = 0.8;
+    private const double AmbushMultiplier = 2.0;
+
+    // This Round's Initiative order, captured once per Round so Ambush can check whether the
+    // acting combatant is literally the last entry in it (see GetOffensiveCrestMultiplier).
+    private List<ICombatant> _currentInitiativeOrder = new();
 
     // Narration hook — kept out of Core so callers (console, UI, tests) decide how/whether to surface it.
     public Action<string>? OnLog { get; set; }
@@ -63,6 +68,7 @@ public class CombatEngine
         Log($"=== Round {_state.RoundNumber} ===");
         RoundStartPhase();
         var initiativeOrder = InitiativePhase();
+        _currentInitiativeOrder = initiativeOrder;
         LogInitiativeOrder(initiativeOrder);
         ActionPhase(initiativeOrder);
         RoundEndPhase();
@@ -123,6 +129,7 @@ public class CombatEngine
         foreach (var actor in initiativeOrder)
         {
             if (actor.CurrentHp <= 0) continue; // may have died mid-round
+            if (ConsumeStun(actor)) continue; // skips this actor's turn entirely
 
             switch (actor)
             {
@@ -134,6 +141,19 @@ public class CombatEngine
                     break;
             }
         }
+    }
+
+    // Pin: stuns its target, skipping their next turn entirely. Until-Consumed (not
+    // Fixed-turn:1) for the same reason as Weak/Marked -- a stun applied by a slower
+    // combatant must survive Round Start's tick to still skip the target's next actual turn.
+    private bool ConsumeStun(ICombatant actor)
+    {
+        var stun = GetStatus(actor, "Stunned");
+        if (stun == null) return false;
+
+        actor.ActiveStatuses.Remove(stun);
+        Log($"{actor.DisplayName} is Stunned and skips their turn.");
+        return true;
     }
 
     private void ResolvePlayerTurn(Anima anima)
@@ -202,6 +222,9 @@ public class CombatEngine
             case SkillCategory.Buff:
                 ResolveBuff(actor, skill, friendlyTeam);
                 break;
+            case SkillCategory.Debuff:
+                ResolveDebuff(actor, skill, opposingTeam, friendlyTeam);
+                break;
             case SkillCategory.Heal:
                 ResolveHeal(actor, skill, friendlyTeam, spiritMultiplier, weakMagnitude);
                 break;
@@ -222,15 +245,25 @@ public class CombatEngine
     }
 
     // Reckless (Crimson)/Vengeance (Onyx): +25% damage dealt while this Anima's own HP is
-    // below 50% of MaxHp. Self-referential, so it's checked here rather than via a status.
+    // below 50% of MaxHp. Ambush (Azure): double damage when this Anima acts LAST in the
+    // Round's Initiative order -- an intentionally ironic passive for Azure's high-Speed kit,
+    // only realistically live once enough of the team has died that Azure ends up the slowest
+    // survivor left to act. All self-referential, so checked here rather than via a status.
     private double GetOffensiveCrestMultiplier(ICombatant actor)
     {
         if (actor is not Anima anima) return 1.0;
-        if (anima.Crest.Name is not ("Reckless" or "Vengeance")) return 1.0;
-        if (anima.CurrentHp >= anima.MaxHp * 0.5) return 1.0;
 
-        Log($"  {anima.DisplayName}'s {anima.Crest.Name} triggers: damage x{CrestConditionalMultiplier:0.##} (HP below 50%).");
-        return CrestConditionalMultiplier;
+        switch (anima.Crest.Name)
+        {
+            case "Reckless" or "Vengeance" when anima.CurrentHp < anima.MaxHp * 0.5:
+                Log($"  {anima.DisplayName}'s {anima.Crest.Name} triggers: damage x{CrestConditionalMultiplier:0.##} (HP below 50%).");
+                return CrestConditionalMultiplier;
+            case "Ambush" when _currentInitiativeOrder.Count > 0 && ReferenceEquals(_currentInitiativeOrder[^1], actor):
+                Log($"  {anima.DisplayName}'s Ambush triggers: damage x{AmbushMultiplier:0.##} (acted last this Round).");
+                return AmbushMultiplier;
+            default:
+                return 1.0;
+        }
     }
 
     // Soul Link (Verdant): +25% healing done while this Anima's own HP is above 50% of MaxHp.
@@ -296,8 +329,7 @@ public class CombatEngine
 
         if (skill.OnHitStatusKeyword != null)
         {
-            ApplyStatus(target, skill.OnHitStatusKeyword, skill.OnHitStatusMagnitude, skill.OnHitStatusDuration, skill.OnHitStatusDurationTurns ?? 0);
-            Log($"  {target.DisplayName} is afflicted with {skill.OnHitStatusKeyword} ({skill.OnHitStatusMagnitude}%).");
+            ApplyOnHitStatus(target, skill.OnHitStatusKeyword, skill.OnHitStatusMagnitude, skill.OnHitStatusDuration, skill.OnHitStatusDurationTurns ?? 0);
         }
 
         if (skill.BaseHeal > 0 && skill.SecondaryTarget != null)
@@ -522,6 +554,38 @@ public class CombatEngine
             : $"  {actor.DisplayName} gains {skill.Name}.");
     }
 
+    // Non-Attack, non-self debuffs that pick a target other than the caster (Pin's Stun,
+    // Misdirect's Marked) -- distinct from ResolveBuff, which always targets the caster.
+    private void ResolveDebuff(ICombatant actor, Skill skill, List<ICombatant> opposingTeam, List<ICombatant> friendlyTeam)
+    {
+        var team = IsFriendlyTargetType(skill.Target) ? friendlyTeam : opposingTeam;
+        var target = SelectTarget(skill.Target, team);
+        if (target == null)
+        {
+            Log("  No valid target.");
+            return;
+        }
+
+        if (skill.Target is TargetType.Enemy or TargetType.Ally)
+        {
+            ConsumeMarked(target);
+        }
+
+        switch (skill.Name)
+        {
+            case "Pin":
+                ApplyStatus(target, "Stunned", 0, DurationType.UntilConsumed, 0);
+                Log($"  {target.DisplayName} is Stunned.");
+                break;
+            case "Misdirect":
+                ApplyMarked(target, team);
+                break;
+            default:
+                Log($"  ({skill.Name} debuff isn't resolved yet.)");
+                break;
+        }
+    }
+
     // A team can only have one Marked target at a time -- applying a new Marked (whether via
     // Taunt targeting self, or a future Misdirect-style skill targeting an ally) strips any
     // existing Marked on that team first. Until-Consumed: persists until the next opposing
@@ -553,6 +617,31 @@ public class CombatEngine
 
         target.ActiveStatuses.Remove(marked);
         Log($"  {target.DisplayName}'s Marked is consumed by the redirected action.");
+    }
+
+    // On-hit status application for Attack skills (Weak, Bleed, ...). Bleed refreshes its
+    // existing instance's remaining duration instead of stacking a second simultaneous DOT --
+    // same "don't duplicate" idea as Shield's magnitude-stacking, just applied to duration.
+    // Every other on-hit status is a fresh, independent application.
+    private void ApplyOnHitStatus(ICombatant target, string keyword, int magnitude, DurationType duration, int durationTurns)
+    {
+        if (keyword == "Bleed")
+        {
+            var existingBleed = GetStatus(target, "Bleed");
+            if (existingBleed != null)
+            {
+                existingBleed.RemainingTurns = durationTurns;
+                Log($"  {target.DisplayName}'s Bleed is refreshed ({magnitude} dmg/turn, {durationTurns} turns left).");
+                return;
+            }
+
+            ApplyStatus(target, keyword, magnitude, duration, durationTurns);
+            Log($"  {target.DisplayName} is afflicted with Bleed ({magnitude} dmg/turn, {durationTurns} turns).");
+            return;
+        }
+
+        ApplyStatus(target, keyword, magnitude, duration, durationTurns);
+        Log($"  {target.DisplayName} is afflicted with {keyword} ({magnitude}%).");
     }
 
     private static void ApplyStatus(ICombatant target, string keyword, int magnitude, DurationType duration, int durationTurns)
