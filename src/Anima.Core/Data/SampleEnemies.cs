@@ -240,11 +240,15 @@ public static class SampleEnemies
     // rather than Round-triggered, and is a one-time flat buff -- NOT the Round-based escalating
     // Enrage safety net (see PhaseTwoHpThreshold/PermanentDamageMultiplier on Enemy).
     //
-    // The base Phase design alone produced a 5/5 stalemate/regen-loop in testing (the repeating
-    // guard-add cycle protects her behind position 2 too often, and an unkilled DPS-race add
-    // could out-heal the team's chip damage entirely) -- EnrageRound is now set below as the same
-    // generic safety net Sentinel uses, Round 20 rather than Sentinel's 18 given the added time
-    // the add cycles eat into a fight.
+    // Tuning history: the base Phase design alone produced a 5/5 stalemate/regen-loop (the
+    // repeating guard-add cycle protects her behind position 2 too often, and an unkilled
+    // DPS-race add could out-heal the team's chip damage entirely) -- added EnrageRound = 20
+    // (2 Rounds later than Sentinel's 18, given the added time the add cycles eat into a fight)
+    // as the same generic safety net Sentinel uses. That resolved the infinite stalling but just
+    // converted every run into a fast LOSS instead (Defense 14 left too little of an AoE-augment's
+    // halved chip damage getting through, and the Broodling's 15 HP/turn heal could still fully
+    // offset progress pre-Enrage) -- Defense and the Broodling's heal are retuned down below in
+    // response.
     public static Enemy CreateWardenOfTheHollow()
     {
         var heavyStrike = new Skill
@@ -281,7 +285,7 @@ public static class SampleEnemies
         {
             Name = "Warden of the Hollow",
             MaxHp = 220,
-            Defense = 14,
+            Defense = 11, // retuned down from 14 -- testing found the augmented team's chip damage too weak to matter before Enrage
             CurrentHp = 220,
             Position = 1,
             // Not specified by the design brief -- placeholder between Leech Mother's 6 and
@@ -362,7 +366,7 @@ public static class SampleEnemies
             CurrentHp = 25,
             Speed = 6,
             HealsOnTurnStartTarget = warden,
-            HealsOnTurnStartAmount = 15,
+            HealsOnTurnStartAmount = 8, // retuned down from 15 -- testing found an unkilled Broodling could fully out-heal the team's chip damage (the "regen-loop")
             BehaviorRules = new List<EnemyBehaviorRule>
             {
                 new EnemyBehaviorRule
