@@ -100,9 +100,26 @@ public class CombatEngine
             if (enemy.EnrageRound.HasValue && !enemy.IsEnraged && _state.RoundNumber >= enemy.EnrageRound.Value)
             {
                 enemy.IsEnraged = true;
+                enemy.EnrageTriggeredRound = _state.RoundNumber;
                 Log($"{enemy.Name} becomes ENRAGED! Damage output increased.");
             }
         }
+    }
+
+    // Enrage escalation: EnrageDamageMultiplier is the bonus at the triggering Round; every
+    // Round after that, the bonus itself doubles (multiplicative on the bonus, not the
+    // multiplier) — Round 18: +75%, Round 19: +150%, Round 20: +300%, Round 21: +600%, etc.
+    private static double GetEnrageMultiplier(Enemy enemy, int currentRound)
+    {
+        if (!enemy.IsEnraged || enemy.EnrageTriggeredRound is not int triggeredRound)
+        {
+            return 1.0;
+        }
+
+        var baselineBonus = enemy.EnrageDamageMultiplier - 1.0;
+        var roundsSinceTrigger = currentRound - triggeredRound;
+        var escalatedBonus = baselineBonus * Math.Pow(2, roundsSinceTrigger);
+        return 1.0 + escalatedBonus;
     }
 
     private IEnumerable<ICombatant> AllCombatants() =>
@@ -396,7 +413,7 @@ public class CombatEngine
             }
         }
 
-        var enrageMultiplier = actor is Enemy { IsEnraged: true } enragedEnemy ? enragedEnemy.EnrageDamageMultiplier : 1.0;
+        var enrageMultiplier = actor is Enemy enrageActor ? GetEnrageMultiplier(enrageActor, _state.RoundNumber) : 1.0;
         var raw = baseDamage * damageMultiplier * enrageMultiplier;
 
         // Self modifiers (Reckless/Vengeance, Frenzy, and eventually Primed) apply first;

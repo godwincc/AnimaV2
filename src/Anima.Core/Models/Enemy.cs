@@ -15,9 +15,13 @@ public class Enemy : ICombatant
     public Dictionary<string, object> AiState { get; set; } = new();
 
     // Universal Elite/Boss safety net — forces a fight to resolve instead of stalemating.
+    // EnrageDamageMultiplier is the bonus applied the Round Enrage triggers; every Round after
+    // that, the bonus itself doubles (see CombatEngine.GetEnrageMultiplier), so a stalled fight
+    // gets forced closed within a few Rounds rather than dragging indefinitely.
     public int? EnrageRound { get; set; } // null = no enrage; otherwise the Round number it triggers on
-    public double EnrageDamageMultiplier { get; set; } = 1.75; // +75% default
+    public double EnrageDamageMultiplier { get; set; } = 1.75; // +75% default, at the triggering Round
     public bool IsEnraged { get; set; } = false;
+    public int? EnrageTriggeredRound { get; set; } // Round Enrage actually flipped true; null until then
 
     public string DisplayName => Name;
 }
