@@ -73,4 +73,11 @@ public class Skill
     // Guard-style summon: the new combatant takes position 1, pushing the caster back to the
     // next open position, instead of the summon just filling the first open slot behind them.
     public bool SummonInFront { get; set; }
+
+    // Shallow copy is enough: every mutable field is a scalar (Augments mutate BaseDamage/
+    // EnergyCost in place), and the reference-type fields (override arrays, summon delegates)
+    // are never mutated after construction, only replaced wholesale. Needed by Reforge so a
+    // rolled part handed to one Anima is an independent instance, not shared with every other
+    // Anima that rolls the same part from the pool.
+    public Skill Clone() => (Skill)MemberwiseClone();
 }
