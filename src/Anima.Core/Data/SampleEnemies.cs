@@ -293,7 +293,7 @@ public static class SampleEnemies
             Speed = 7,
             PhaseTwoHpThreshold = 110, // 50% of MaxHp
             PhaseTwoDamageMultiplier = 1.5, // Reckless Fury: +50%, flat and permanent once triggered
-            EnrageRound = 20, // generic Round-based escalation safety net (see CombatEngine.GetEnrageMultiplier) -- 2 Rounds later than Sentinel's 18
+            EnrageRound = 25, // pushed up from 20 (via 23) -- 20 got even the augmented batch losing every run 2-8 Rounds past the trigger despite real (Defense/heal-retune-driven) progress; 25 gives the team more runway before the escalation clock cuts a close fight off
             BehaviorRules = new List<EnemyBehaviorRule>(), // filled in below, once `warden` exists for the adds to self-reference
         };
 
