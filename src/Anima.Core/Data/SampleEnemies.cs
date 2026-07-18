@@ -7,6 +7,14 @@ using Anima.Core.Models;
 // Not the real enemy roster. Replace once encounter design is finalized.
 public static class SampleEnemies
 {
+    // Warden of the Hollow's add-summon cadence -- Rounds between "no add currently active"
+    // becoming eligible to summon again, measured from the last add's death (or fight start, if
+    // none has spawned yet). Retuned up from 5 -- testing found 5 left the augmented batch still
+    // losing every run even at EnrageRound 25; a longer gap gives the team more windows to reach
+    // Warden directly without a guard in front of her. Shared by the initial eligibility fallback
+    // and both adds' OnDeath reschedule below, so it only needs to change in one place.
+    private const int WardenSummonCadenceRounds = 7;
+
     public static Enemy CreateQuillfang()
     {
         var needleVolley = new Skill
@@ -315,7 +323,7 @@ public static class SampleEnemies
                 Condition = (enemy, state) =>
                 {
                     var addActive = state.EnemyTeam.Any(e => e.CurrentHp > 0 && !ReferenceEquals(e, enemy));
-                    var nextEligibleRound = enemy.AiState.TryGetValue("NextEligibleSummonRound", out var v) ? (int)v : 5;
+                    var nextEligibleRound = enemy.AiState.TryGetValue("NextEligibleSummonRound", out var v) ? (int)v : WardenSummonCadenceRounds;
                     return !addActive && state.RoundNumber >= nextEligibleRound;
                 },
                 Skill = summonAdd,
@@ -375,7 +383,7 @@ public static class SampleEnemies
                     Skill = siphonBite,
                 },
             },
-            OnDeath = state => warden.AiState["NextEligibleSummonRound"] = state.RoundNumber + 5,
+            OnDeath = state => warden.AiState["NextEligibleSummonRound"] = state.RoundNumber + WardenSummonCadenceRounds,
         };
     }
 
@@ -409,7 +417,7 @@ public static class SampleEnemies
                     Skill = crush,
                 },
             },
-            OnDeath = state => warden.AiState["NextEligibleSummonRound"] = state.RoundNumber + 5,
+            OnDeath = state => warden.AiState["NextEligibleSummonRound"] = state.RoundNumber + WardenSummonCadenceRounds,
         };
     }
 }
