@@ -394,6 +394,21 @@ public class CombatEngine
         int weakMagnitude,
         bool frenzied = false)
     {
+        // AoE Attack (e.g. an "AoE Damage" augment converting Slash to hit everyone): repeats the
+        // full single-target pipeline once per living enemy -- BaseDamage is expected to already
+        // be pre-scaled (e.g. halved) by whatever set Target to AllEnemies, same as any other
+        // BaseDamage value. Snapshotted via ToList() since a hit inside the loop can kill a later
+        // target in the same list before its own turn comes up.
+        if (skill.Target == TargetType.AllEnemies)
+        {
+            foreach (var aoeTarget in opposingTeam.Where(c => c.CurrentHp > 0).ToList())
+            {
+                if (aoeTarget.CurrentHp <= 0) continue; // may have died earlier in this same AoE sweep
+                ResolveSingleTargetAttack(actor, skill, aoeTarget, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied);
+            }
+            return;
+        }
+
         var target = SelectTarget(skill.Target, opposingTeam);
         if (target == null)
         {
@@ -401,6 +416,19 @@ public class CombatEngine
             return;
         }
 
+        ResolveSingleTargetAttack(actor, skill, target, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied);
+    }
+
+    private void ResolveSingleTargetAttack(
+        ICombatant actor,
+        Skill skill,
+        ICombatant target,
+        List<ICombatant> friendlyTeam,
+        double damageMultiplier,
+        double spiritMultiplier,
+        int weakMagnitude,
+        bool frenzied)
+    {
         if (skill.Target is TargetType.Enemy or TargetType.Ally)
         {
             ConsumeMarked(target);
