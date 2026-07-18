@@ -9,11 +9,11 @@ public static class SampleEnemies
 {
     // Warden of the Hollow's add-summon cadence -- Rounds between "no add currently active"
     // becoming eligible to summon again, measured from the last add's death (or fight start, if
-    // none has spawned yet). Retuned up from 5 -- testing found 5 left the augmented batch still
-    // losing every run even at EnrageRound 25; a longer gap gives the team more windows to reach
-    // Warden directly without a guard in front of her. Shared by the initial eligibility fallback
+    // none has spawned yet). LOCKED at the original 5 (briefly pushed to 7) -- an optimized team
+    // (Misdirect access via Shade, stacked augments) proved to be the actual lever, not the
+    // stat/timing knobs; see the semi-run test notes. Shared by the initial eligibility fallback
     // and both adds' OnDeath reschedule below, so it only needs to change in one place.
-    private const int WardenSummonCadenceRounds = 7;
+    private const int WardenSummonCadenceRounds = 5;
 
     public static Enemy CreateQuillfang()
     {
@@ -255,8 +255,14 @@ public static class SampleEnemies
     // as the same generic safety net Sentinel uses. That resolved the infinite stalling but just
     // converted every run into a fast LOSS instead (Defense 14 left too little of an AoE-augment's
     // halved chip damage getting through, and the Broodling's 15 HP/turn heal could still fully
-    // offset progress pre-Enrage) -- Defense and the Broodling's heal are retuned down below in
-    // response.
+    // offset progress pre-Enrage), so Defense and the Broodling's heal were retuned down (14->11,
+    // 15->8). Several more retune passes followed (EnrageRound up to 23 then 25, summon cadence
+    // 5->7, Defense 11->9) but never produced a single win in the augmented batch. Swapping in a
+    // genuinely optimized team instead (Boulder out, Shade in for real Misdirect access against
+    // the guard, meaningfully stacked augments) finally got wins where five stat/timing retunes
+    // hadn't -- so Warden's own numbers are LOCKED back at their first post-regen-loop-fix values
+    // (Defense 11, Broodling heal 8, EnrageRound 20, summon cadence 5) and the console harness now
+    // tests that optimized build instead of continuing to chase her stats.
     public static Enemy CreateWardenOfTheHollow()
     {
         var heavyStrike = new Skill
@@ -293,7 +299,7 @@ public static class SampleEnemies
         {
             Name = "Warden of the Hollow",
             MaxHp = 220,
-            Defense = 11, // retuned down from 14 -- testing found the augmented team's chip damage too weak to matter before Enrage
+            Defense = 11, // LOCKED (originally 14, briefly 9) -- an optimized team beat pure stat/timing retunes; see the tuning history above
             CurrentHp = 220,
             Position = 1,
             // Not specified by the design brief -- placeholder between Leech Mother's 6 and
@@ -301,7 +307,7 @@ public static class SampleEnemies
             Speed = 7,
             PhaseTwoHpThreshold = 110, // 50% of MaxHp
             PhaseTwoDamageMultiplier = 1.5, // Reckless Fury: +50%, flat and permanent once triggered
-            EnrageRound = 25, // pushed up from 20 (via 23) -- 20 got even the augmented batch losing every run 2-8 Rounds past the trigger despite real (Defense/heal-retune-driven) progress; 25 gives the team more runway before the escalation clock cuts a close fight off
+            EnrageRound = 20, // LOCKED (briefly pushed to 23, then 25) -- see Defense's comment below
             BehaviorRules = new List<EnemyBehaviorRule>(), // filled in below, once `warden` exists for the adds to self-reference
         };
 
@@ -374,7 +380,7 @@ public static class SampleEnemies
             CurrentHp = 25,
             Speed = 6,
             HealsOnTurnStartTarget = warden,
-            HealsOnTurnStartAmount = 8, // retuned down from 15 -- testing found an unkilled Broodling could fully out-heal the team's chip damage (the "regen-loop")
+            HealsOnTurnStartAmount = 8, // LOCKED, retuned down from 15 -- testing found an unkilled Broodling could fully out-heal the team's chip damage (the "regen-loop")
             BehaviorRules = new List<EnemyBehaviorRule>
             {
                 new EnemyBehaviorRule

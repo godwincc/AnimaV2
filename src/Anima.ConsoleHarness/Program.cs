@@ -1,76 +1,57 @@
 using Anima.Core.Combat;
 using Anima.Core.Data;
-using Anima.Core.Enums;
 using Anima.Core.Models;
 // "Anima" (the model class) shares its name with the root "Anima" namespace, so a bare
 // reference resolves to the namespace, not the type — alias it to sidestep the clash.
 using AnimaUnit = Anima.Core.Models.Anima;
 
-// ==== SEMI-RUN TEST ====
-// Validates the resource loop (earn Wisp/Ember from wins, spend Ember at a Shop step on
-// Increase Effect augments) end-to-end for the first time, replacing the prior one-off test
-// where augments were hand-edited directly onto SampleAnimas.cs. Fixed fight sequence, no
-// node-map/branching logic yet — see the flagged placeholders in the summary at the end.
+// ==== WARDEN OF THE HOLLOW — OPTIMIZED-BUILD TEST ====
+// Five consecutive tuning passes on Warden's own stats (EnrageRound 20->23->25, summon cadence
+// 5->7, Defense 11->9) never got the starter trio (Ember/Boulder/Sprout) a single win -- the
+// augmented batch's best margin plateaued around 55-65/220 HP regardless of which lever moved.
+// Swapping in a genuinely optimized team instead (Boulder out, Shade in for real Misdirect
+// access against the guard, stacked augments) got the first wins of this whole test arc, but a
+// same-build confirmation batch swung to 0/5 -- combined record 3W-7L (30%), a real coinflip
+// with near-misses on both sides (41 HP and 1 HP losses). Warden's stats are now LOCKED (Defense
+// 11, Broodling heal 8, EnrageRound 20, summon cadence 5) -- no more changes to her. This test
+// adds a THIRD Increase Effect stack on Execute (one more than the winning build had) to see if
+// that small extra investment pushes the coinflip toward a favored-but-contested win rate.
 
-const int WispPerWin = 50;
-const int EmberPerWinPerColor = 2; // one color-matched batch per color present on the team
-const int AugmentEmberCost = 3;
-const double AugmentMultiplier = 1.4; // matches the +~40% precedent from the earlier manual test
 const int MaxRounds = 50;
+const int RunCount = 5;
+const double AugmentMultiplier = 1.4; // Increase Effect, same precedent as every prior augment test
 
-var ember = SampleAnimas.CreateEmber();
-var boulder = SampleAnimas.CreateBoulder();
-var sprout = SampleAnimas.CreateSprout();
-var playerTeam = new List<AnimaUnit> { ember, boulder, sprout };
+Console.WriteLine("================ Optimized build: Ember + Shade + Sprout vs. Warden of the Hollow ================");
 
-// Placeholder Shop decision rule: each Anima has a fixed priority queue of "which skill
-// benefits most" — its highest-usage Attack/Heal/Shield skill first, second-highest second.
-// A real Shop would let the player choose; this stands in for that choice until one exists.
-var augmentPriority = new Dictionary<string, Queue<string>>
+for (var runNumber = 1; runNumber <= RunCount; runNumber++)
 {
-    ["Ember"] = new Queue<string>(new[] { "Slash", "Execute" }),
-    ["Boulder"] = new Queue<string>(new[] { "Bash", "Hardened" }),
-    ["Sprout"] = new Queue<string>(new[] { "Smite", "Lifebloom" }),
-};
-
-var totalWisp = 0;
-var emberBalance = new Dictionary<AnimaColor, int>
-{
-    [AnimaColor.Crimson] = 0,
-    [AnimaColor.Onyx] = 0,
-    [AnimaColor.Verdant] = 0,
-};
-var emberEarned = new Dictionary<AnimaColor, int>(emberBalance);
-var augmentLog = new List<string>();
-
-var fights = new (string Label, Func<Enemy> Factory)[]
-{
-    ("Grovehide", SampleEnemies.CreateGrovehide),
-    ("Quillfang", SampleEnemies.CreateQuillfang),
-    ("Grovehide (rematch)", SampleEnemies.CreateGrovehide),
-    ("The Sentinel", SampleEnemies.CreateSentinel),
-};
-
-var runOutcome = "Run did not complete.";
-
-for (var fightNumber = 1; fightNumber <= fights.Length; fightNumber++)
-{
-    var (label, factory) = fights[fightNumber - 1];
     Console.WriteLine();
-    Console.WriteLine($"########## FIGHT {fightNumber}: {label} ##########");
+    Console.WriteLine($"########## RUN {runNumber} ##########");
 
-    // Full reset between fights: HP/statuses/position restored, fresh deck/hand/energy each
-    // fight. The same Anima instances (and any augments applied to their Skill objects) carry
-    // over — see the "no HP persistence" note in the final summary for why this is a placeholder.
-    ember.CurrentHp = ember.MaxHp; ember.ActiveStatuses.Clear(); ember.Position = 1;
-    boulder.CurrentHp = boulder.MaxHp; boulder.ActiveStatuses.Clear(); boulder.Position = 2;
-    sprout.CurrentHp = sprout.MaxHp; sprout.ActiveStatuses.Clear(); sprout.Position = 3;
+    var ember = SampleAnimas.CreateEmber();
+    var shade = SampleAnimas.CreateShade();
+    var sprout = SampleAnimas.CreateSprout();
+    ember.Position = 1;
+    shade.Position = 2;
+    sprout.Position = 3;
+    var playerTeam = new List<AnimaUnit> { ember, shade, sprout };
 
-    var enemy = factory();
+    // Increase Effect on Execute, stacked three times: 40 -> 56 -> 78 -> 109.
+    ApplyIncreaseEffect(ember, "Execute");
+    ApplyIncreaseEffect(ember, "Execute");
+    ApplyIncreaseEffect(ember, "Execute");
+    // Increase Effect on Slash, once: 25 -> 35.
+    ApplyIncreaseEffect(ember, "Slash");
+    // Decrease Cost on Misdirect: 2 energy -> 1, so Shade can afford to recast it every Round
+    // (it only needs to survive until Ember's own attack consumes it via the Marked redirect --
+    // see ChooseShadeSkill below -- so cheap-and-recastable beats a one-shot application).
+    ApplyDecreaseCost(shade, "Misdirect");
+
+    var warden = SampleEnemies.CreateWardenOfTheHollow();
     var state = new CombatState
     {
         PlayerTeam = playerTeam,
-        EnemyTeam = new List<Enemy> { enemy },
+        EnemyTeam = new List<Enemy> { warden },
     };
 
     var engine = new CombatEngine(state)
@@ -79,7 +60,7 @@ for (var fightNumber = 1; fightNumber <= fights.Length; fightNumber++)
         ChoosePlayerSkill = (anima, combatState) => anima.Id switch
         {
             "Ember" => ChooseEmberSkill(combatState),
-            "Boulder" => ChooseBoulderSkill(combatState),
+            "Shade" => ChooseShadeSkill(combatState),
             "Sprout" => ChooseSproutSkill(combatState),
             _ => null,
         },
@@ -102,150 +83,51 @@ for (var fightNumber = 1; fightNumber <= fights.Length; fightNumber++)
     if (playerWon)
     {
         Console.WriteLine($"Result: WIN (Round {endedInRound})");
-
-        totalWisp += WispPerWin;
-        foreach (var color in playerTeam.Select(a => a.Color).Distinct())
-        {
-            emberBalance[color] += EmberPerWinPerColor;
-            emberEarned[color] += EmberPerWinPerColor;
-        }
-        Console.WriteLine($"Earned: {WispPerWin} Wisp, {EmberPerWinPerColor} Ember each of Crimson/Onyx/Verdant.");
-
-        if (fightNumber == fights.Length)
-        {
-            runOutcome = $"Run complete: defeated {label} in Round {endedInRound}.";
-        }
     }
     else if (playerAlive)
     {
-        Console.WriteLine("Result: STALEMATE (round cap reached) — treating as a run failure.");
-        runOutcome = $"Run halted: stalemate against {label} (fight {fightNumber}, round cap {MaxRounds}).";
-        break;
+        Console.WriteLine($"Result: STALEMATE (round cap {MaxRounds} reached)");
     }
     else
     {
-        Console.WriteLine("Result: LOSS");
-        runOutcome = $"Run halted: lost to {label} (fight {fightNumber}, Round {endedInRound}).";
-        break;
-    }
-
-    if (fightNumber % 2 == 0)
-    {
-        RunShop(fightNumber);
+        Console.WriteLine($"Result: LOSS (Round {endedInRound})");
     }
 }
 
-Console.WriteLine();
-Console.WriteLine("########## SEMI-RUN SUMMARY ##########");
-Console.WriteLine($"Total Wisp earned: {totalWisp} (no Wisp sink exists in this v1 — see notes)");
-foreach (var color in new[] { AnimaColor.Crimson, AnimaColor.Onyx, AnimaColor.Verdant })
-{
-    Console.WriteLine($"Total {color} Ember earned: {emberEarned[color]} (unspent remainder: {emberBalance[color]})");
-}
+// ---- Augments (applied once per run, before StartCombat, directly on the fresh Skill instances) ----
 
-Console.WriteLine();
-Console.WriteLine("Augments applied:");
-if (augmentLog.Count == 0)
-{
-    Console.WriteLine("  none");
-}
-foreach (var entry in augmentLog)
-{
-    Console.WriteLine($"  - {entry}");
-}
-
-Console.WriteLine();
-Console.WriteLine(runOutcome);
-
-// ---- Shop step (placeholder decision rule) ----
-
-void RunShop(int fightNumber)
-{
-    Console.WriteLine();
-    Console.WriteLine($"---- SHOP (after fight {fightNumber}) ----");
-    Console.WriteLine($"Balance: {totalWisp} Wisp | Crimson {emberBalance[AnimaColor.Crimson]} | " +
-        $"Onyx {emberBalance[AnimaColor.Onyx]} | Verdant {emberBalance[AnimaColor.Verdant]}");
-
-    var purchased = false;
-    foreach (var anima in playerTeam)
-    {
-        var queue = augmentPriority[anima.Id];
-        if (queue.Count == 0)
-        {
-            continue;
-        }
-
-        if (emberBalance[anima.Color] < AugmentEmberCost)
-        {
-            Console.WriteLine($"  Not enough {anima.Color} Ember to augment {anima.Id} yet " +
-                $"({emberBalance[anima.Color]}/{AugmentEmberCost}).");
-            continue;
-        }
-
-        var skillName = queue.Dequeue();
-        emberBalance[anima.Color] -= AugmentEmberCost;
-        ApplyIncreaseEffectAugment(anima, skillName, fightNumber);
-        purchased = true;
-    }
-
-    if (!purchased)
-    {
-        Console.WriteLine("  No purchases this Shop visit.");
-    }
-}
-
-void ApplyIncreaseEffectAugment(AnimaUnit anima, string skillName, int fightNumber)
+void ApplyIncreaseEffect(AnimaUnit anima, string skillName)
 {
     var skill = anima.DeckSkills.First(s => s.Name == skillName);
-
-    string field;
-    int before, after;
-    if (skill.BaseDamage > 0)
-    {
-        before = skill.BaseDamage;
-        skill.BaseDamage = (int)Math.Round(skill.BaseDamage * AugmentMultiplier);
-        after = skill.BaseDamage;
-        field = "damage";
-    }
-    else if (skill.BaseHeal > 0)
-    {
-        before = skill.BaseHeal;
-        skill.BaseHeal = (int)Math.Round(skill.BaseHeal * AugmentMultiplier);
-        after = skill.BaseHeal;
-        field = "heal";
-    }
-    else
-    {
-        before = skill.BaseShield;
-        skill.BaseShield = (int)Math.Round(skill.BaseShield * AugmentMultiplier);
-        after = skill.BaseShield;
-        field = "shield";
-    }
-
-    var entry = $"After fight {fightNumber}: Increase Effect on {anima.Id}'s {skillName} " +
-        $"({field} {before} -> {after}), spent {AugmentEmberCost} {anima.Color} Ember.";
-    augmentLog.Add(entry);
-    Console.WriteLine($"  [PURCHASE] {entry}");
+    var before = skill.BaseDamage;
+    skill.BaseDamage = (int)Math.Round(skill.BaseDamage * AugmentMultiplier);
+    Console.WriteLine($"  [AUGMENT] Increase Effect on {anima.Id}'s {skillName}: damage {before} -> {skill.BaseDamage}.");
 }
 
-// ---- Skill-selection priorities (hardcoded, one per Anima; same across every fight) ----
+void ApplyDecreaseCost(AnimaUnit anima, string skillName)
+{
+    var skill = anima.DeckSkills.First(s => s.Name == skillName);
+    var before = skill.EnergyCost;
+    skill.EnergyCost = Math.Max(0, skill.EnergyCost - 1);
+    Console.WriteLine($"  [AUGMENT] Decrease Cost on {anima.Id}'s {skillName}: energy {before} -> {skill.EnergyCost}.");
+}
+
+// ---- Skill-selection priorities (hardcoded, one per Anima; same across every run) ----
 
 // Prefer Slash; if it's not in hand, fall back through the rest of the kit (damage before
 // pure utility) rather than passing just because the single favorite card wasn't drawn.
 Skill? ChooseEmberSkill(CombatState combatState) =>
     ChooseFromPriority(combatState, "Slash", "Execute", "Charge");
 
-// Proactively Taunt (self-Mark) whenever nobody on the player team is currently Marked --
-// it doesn't expire on its own (Until-Consumed), so recasting while one's already active
-// would just waste energy re-marking the same redirect. Otherwise Bash. Either way, fall
-// back through the rest of the kit before passing.
-Skill? ChooseBoulderSkill(CombatState combatState)
-{
-    var alreadyMarked = combatState.PlayerTeam.Any(a => a.CurrentHp > 0 && a.ActiveStatuses.Any(s => s.Keyword == "Marked"));
-    return !alreadyMarked
-        ? ChooseFromPriority(combatState, "Taunt", "Bash", "Hardened")
-        : ChooseFromPriority(combatState, "Bash", "Taunt", "Hardened");
-}
+// Always lead with Misdirect (now cheap post-Decrease-Cost) rather than only when Warden isn't
+// already Marked: SelectTarget's ChosenEnemy fallback resolves to the first living entry in
+// EnemyTeam, which is always Warden herself (she's added to the list before any add is ever
+// summoned) -- so Misdirect reliably Marks HER specifically, not whichever add is in front. Marked
+// then gets consumed by the very next Enemy-type attack (Ember's Slash, here) that Round, so it
+// needs re-casting every Round rather than only once -- Shade's Speed (13, fastest on the team)
+// guarantees she acts before Ember each Round, so the Mark is always fresh when Slash resolves.
+Skill? ChooseShadeSkill(CombatState combatState) =>
+    ChooseFromPriority(combatState, "Misdirect", "Exploit", "Pin");
 
 // Heal the lowest-HP ally with Lifebloom if they're below 50% HP, otherwise Smite. Either way,
 // fall back through the rest of the kit before passing.
