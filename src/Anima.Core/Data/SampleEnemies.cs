@@ -238,9 +238,13 @@ public static class SampleEnemies
     // Boss — the game's first. Phase 1 telegraphs the same way Sentinel does (alternating
     // self-Shield wind-up / big hit), but the Phase 2 transition is HP-triggered (below 50%)
     // rather than Round-triggered, and is a one-time flat buff -- NOT the Round-based escalating
-    // Enrage safety net (see PhaseTwoHpThreshold/PermanentDamageMultiplier on Enemy). No
-    // EnrageRound is configured here deliberately -- testing the base Phase design's own
-    // stall-resistance first before deciding whether she needs the escalation safety net too.
+    // Enrage safety net (see PhaseTwoHpThreshold/PermanentDamageMultiplier on Enemy).
+    //
+    // The base Phase design alone produced a 5/5 stalemate/regen-loop in testing (the repeating
+    // guard-add cycle protects her behind position 2 too often, and an unkilled DPS-race add
+    // could out-heal the team's chip damage entirely) -- EnrageRound is now set below as the same
+    // generic safety net Sentinel uses, Round 20 rather than Sentinel's 18 given the added time
+    // the add cycles eat into a fight.
     public static Enemy CreateWardenOfTheHollow()
     {
         var heavyStrike = new Skill
@@ -285,6 +289,7 @@ public static class SampleEnemies
             Speed = 7,
             PhaseTwoHpThreshold = 110, // 50% of MaxHp
             PhaseTwoDamageMultiplier = 1.5, // Reckless Fury: +50%, flat and permanent once triggered
+            EnrageRound = 20, // generic Round-based escalation safety net (see CombatEngine.GetEnrageMultiplier) -- 2 Rounds later than Sentinel's 18
             BehaviorRules = new List<EnemyBehaviorRule>(), // filled in below, once `warden` exists for the adds to self-reference
         };
 
