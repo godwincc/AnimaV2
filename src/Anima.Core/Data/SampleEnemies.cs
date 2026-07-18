@@ -234,4 +234,173 @@ public static class SampleEnemies
             },
         };
     }
+
+    // Boss — the game's first. Phase 1 telegraphs the same way Sentinel does (alternating
+    // self-Shield wind-up / big hit), but the Phase 2 transition is HP-triggered (below 50%)
+    // rather than Round-triggered, and is a one-time flat buff -- NOT the Round-based escalating
+    // Enrage safety net (see PhaseTwoHpThreshold/PermanentDamageMultiplier on Enemy). No
+    // EnrageRound is configured here deliberately -- testing the base Phase design's own
+    // stall-resistance first before deciding whether she needs the escalation safety net too.
+    public static Enemy CreateWardenOfTheHollow()
+    {
+        var heavyStrike = new Skill
+        {
+            Name = "Heavy Strike",
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 0,
+            BaseDamage = 35,
+        };
+
+        var guardPulse = new Skill
+        {
+            Name = "Guard Pulse",
+            Category = SkillCategory.Buff,
+            Range = AttackRange.NA,
+            Target = TargetType.SelfTarget,
+            EnergyCost = 0,
+            BaseShield = 30,
+            Duration = DurationType.UntilConsumed,
+        };
+
+        var summonAdd = new Skill
+        {
+            Name = "Summon Add",
+            Category = SkillCategory.Summon,
+            Target = TargetType.SelfTarget,
+            EnergyCost = 0,
+            SummonInFront = true,
+        };
+
+        var warden = new Enemy
+        {
+            Name = "Warden of the Hollow",
+            MaxHp = 220,
+            Defense = 14,
+            CurrentHp = 220,
+            Position = 1,
+            // Not specified by the design brief -- placeholder between Leech Mother's 6 and
+            // Sentinel's 8, flagged pending real numbers (same pattern as Rustling Swarm's Speed).
+            Speed = 7,
+            PhaseTwoHpThreshold = 110, // 50% of MaxHp
+            PhaseTwoDamageMultiplier = 1.5, // Reckless Fury: +50%, flat and permanent once triggered
+            BehaviorRules = new List<EnemyBehaviorRule>(), // filled in below, once `warden` exists for the adds to self-reference
+        };
+
+        // Both adds need to reference `warden` (heal target / summon-cooldown reschedule on
+        // death), so they're built after `warden` exists rather than inline above.
+        summonAdd.SummonFactoryChoices = new Func<Enemy>[]
+        {
+            () => CreateWardenDpsRaceAdd(warden),
+            () => CreateWardenTankAdd(warden),
+        };
+
+        warden.BehaviorRules = new List<EnemyBehaviorRule>
+        {
+            // Summon check takes priority over the attack telegraph below, same ordering as
+            // Leech Mother's own Spawn Brood rule -- a due summon pre-empts whatever Phase-1
+            // alternation Warden would otherwise be mid-cycle on.
+            new EnemyBehaviorRule
+            {
+                Condition = (enemy, state) =>
+                {
+                    var addActive = state.EnemyTeam.Any(e => e.CurrentHp > 0 && !ReferenceEquals(e, enemy));
+                    var nextEligibleRound = enemy.AiState.TryGetValue("NextEligibleSummonRound", out var v) ? (int)v : 5;
+                    return !addActive && state.RoundNumber >= nextEligibleRound;
+                },
+                Skill = summonAdd,
+            },
+            new EnemyBehaviorRule
+            {
+                Condition = (enemy, state) =>
+                    enemy.PhaseTwoTriggered || (enemy.AiState.TryGetValue("Charging", out var v) && v is true),
+                Skill = heavyStrike,
+                // Once Phase 2 hits, Charging never gets reset -- same "leave it set" pattern as
+                // Sentinel's post-Enrage Charging Slam, letting Heavy Strike fire every Round.
+                OnUsed = enemy =>
+                {
+                    if (!enemy.PhaseTwoTriggered) enemy.AiState["Charging"] = false;
+                },
+            },
+            new EnemyBehaviorRule
+            {
+                Condition = (enemy, state) => !enemy.PhaseTwoTriggered, // stops firing entirely once Phase 2 hits
+                Skill = guardPulse,
+                OnUsed = enemy => enemy.AiState["Charging"] = true,
+            },
+        };
+
+        return warden;
+    }
+
+    // Add 1 -- "DPS-race add": a small attacker that also heals Warden 15 HP at the start of
+    // each of its own turns while it's alive, creating a genuine choice: ignore it and let Warden
+    // slowly out-heal chip damage, or spend actions killing a 25 HP target instead of hitting her.
+    private static Enemy CreateWardenDpsRaceAdd(Enemy warden)
+    {
+        var siphonBite = new Skill
+        {
+            Name = "Siphon Bite",
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 0,
+            BaseDamage = 8,
+        };
+
+        return new Enemy
+        {
+            Name = "Warden's Broodling",
+            MaxHp = 25,
+            Defense = 3,
+            CurrentHp = 25,
+            Speed = 6,
+            HealsOnTurnStartTarget = warden,
+            HealsOnTurnStartAmount = 15,
+            BehaviorRules = new List<EnemyBehaviorRule>
+            {
+                new EnemyBehaviorRule
+                {
+                    Condition = (enemy, state) => true, // always attacks
+                    Skill = siphonBite,
+                },
+            },
+            OnDeath = state => warden.AiState["NextEligibleSummonRound"] = state.RoundNumber + 5,
+        };
+    }
+
+    // Add 2 -- "Tank/heal-check add": no gimmick, just a chunkier HP/Defense body that eats
+    // several turns of focus fire on its own -- the "is it worth pushing through" counterpart to
+    // Add 1's "is it worth racing" choice.
+    private static Enemy CreateWardenTankAdd(Enemy warden)
+    {
+        var crush = new Skill
+        {
+            Name = "Crush",
+            Category = SkillCategory.Attack,
+            Range = AttackRange.Melee,
+            Target = TargetType.Enemy,
+            EnergyCost = 0,
+            BaseDamage = 22,
+        };
+
+        return new Enemy
+        {
+            Name = "Warden's Bulwark",
+            MaxHp = 45,
+            Defense = 8,
+            CurrentHp = 45,
+            Speed = 5,
+            BehaviorRules = new List<EnemyBehaviorRule>
+            {
+                new EnemyBehaviorRule
+                {
+                    Condition = (enemy, state) => true, // always attacks
+                    Skill = crush,
+                },
+            },
+            OnDeath = state => warden.AiState["NextEligibleSummonRound"] = state.RoundNumber + 5,
+        };
+    }
 }

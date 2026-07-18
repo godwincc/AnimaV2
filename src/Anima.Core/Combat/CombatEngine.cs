@@ -247,6 +247,15 @@ public class CombatEngine
 
     private void ResolveEnemyTurn(Enemy enemy)
     {
+        // Turn-start heal-the-boss passive (e.g. Warden's DPS-race add) — fires before rule
+        // selection, so it happens regardless of what (if anything) this enemy does this turn.
+        if (enemy.HealsOnTurnStartTarget is { CurrentHp: > 0 } healTarget && enemy.HealsOnTurnStartAmount > 0)
+        {
+            var before = healTarget.CurrentHp;
+            healTarget.CurrentHp = Math.Min(healTarget.MaxHp, healTarget.CurrentHp + enemy.HealsOnTurnStartAmount);
+            Log($"  {enemy.DisplayName} channels {healTarget.CurrentHp - before} HP into {healTarget.DisplayName} ({healTarget.DisplayName} HP: {healTarget.CurrentHp}).");
+        }
+
         var rule = enemy.BehaviorRules.FirstOrDefault(r =>
             (!enemy.IsEnraged || !r.IsDefensive) && r.Condition(enemy, _state) && IsSkillUsableFrom(r.Skill, enemy.Position));
         if (rule == null)
@@ -414,7 +423,10 @@ public class CombatEngine
         }
 
         var enrageMultiplier = actor is Enemy enrageActor ? GetEnrageMultiplier(enrageActor, _state.RoundNumber) : 1.0;
-        var raw = baseDamage * damageMultiplier * enrageMultiplier;
+        // Phase-transition buffs (e.g. Warden's Reckless Fury) — flat and permanent once
+        // triggered, stacked alongside (not instead of) the Round-based Enrage multiplier above.
+        var permanentMultiplier = actor is Enemy permActor ? permActor.PermanentDamageMultiplier : 1.0;
+        var raw = baseDamage * damageMultiplier * enrageMultiplier * permanentMultiplier;
 
         // Self modifiers (Reckless/Vengeance, Frenzy, and eventually Primed) apply first;
         // opponent-applied debuffs (Weak) apply last — same multiplier chain, self before opponent.
@@ -433,7 +445,9 @@ public class CombatEngine
         }
 
         var rawInt = (int)Math.Round(raw);
-        var multLabel = enrageMultiplier > 1.0 ? $"{damageMultiplier:0.##} mult x {enrageMultiplier:0.##} enrage" : $"{damageMultiplier:0.##} mult";
+        var multLabel = $"{damageMultiplier:0.##} mult";
+        if (enrageMultiplier > 1.0) multLabel += $" x {enrageMultiplier:0.##} enrage";
+        if (permanentMultiplier > 1.0) multLabel += $" x {permanentMultiplier:0.##} phase2";
         var final = ApplyDamage(target, rawInt, $"{baseDamage} base x {multLabel}", actor);
 
         TriggerReactiveEffects(actor, target, skill);
@@ -587,6 +601,7 @@ public class CombatEngine
         }
 
         var final = remaining > 0 ? Math.Max(remaining - effectiveDefense, 1) : 0;
+        var wasAlive = target.CurrentHp > 0;
         target.CurrentHp = Math.Max(0, target.CurrentHp - final);
 
         Log($"  Target: {target.DisplayName}");
@@ -598,7 +613,41 @@ public class CombatEngine
 
         PurgeDeadAnimaCards(target);
 
+        if (target is Enemy enemyTarget)
+        {
+            if (wasAlive && enemyTarget.CurrentHp <= 0)
+            {
+                enemyTarget.OnDeath?.Invoke(_state);
+            }
+            else if (enemyTarget.CurrentHp > 0)
+            {
+                CheckPhaseTwoTransition(enemyTarget);
+            }
+        }
+
         return final;
+    }
+
+    // Boss Phase transition (e.g. Warden of the Hollow, below 50% HP): fires once, the instant
+    // CurrentHp crosses the configured threshold while still alive -- same "check at the exact
+    // checkpoint it happens" pattern as Retribution above, not a Round Start poll (see Enrage),
+    // since a Phase change should react the moment it happens rather than up to a Round late.
+    private void CheckPhaseTwoTransition(Enemy enemy)
+    {
+        if (enemy.PhaseTwoTriggered) return;
+        if (enemy.PhaseTwoHpThreshold is not int threshold || enemy.CurrentHp > threshold) return;
+
+        enemy.PhaseTwoTriggered = true;
+
+        var shield = GetStatus(enemy, "Shield");
+        if (shield != null)
+        {
+            enemy.ActiveStatuses.Remove(shield);
+            Log($"  {enemy.DisplayName}'s Shield is stripped to 0 as it enters Phase 2.");
+        }
+
+        enemy.PermanentDamageMultiplier *= enemy.PhaseTwoDamageMultiplier;
+        Log($"  {enemy.DisplayName} enters PHASE 2! Damage output permanently increased.");
     }
 
     private const int RetributionWeakMagnitude = 20; // matches Bash/Enfeeble's own Weak magnitude -- no other value specified in the design brief
@@ -1015,9 +1064,17 @@ public class CombatEngine
     // combatant up automatically.
     private void ResolveSummon(ICombatant actor, Skill skill)
     {
-        if (skill.SummonFactory == null || actor is not Enemy enemyActor) return;
+        if (actor is not Enemy enemyActor) return;
 
-        var summon = skill.SummonFactory();
+        // SummonFactoryChoices (e.g. Warden's 50/50 add roll) takes priority over a single fixed
+        // SummonFactory when both would somehow be set -- an explicit, documented RNG use via
+        // the same _random the deck shuffle already uses.
+        Func<Enemy>? factory = skill.SummonFactoryChoices is { Length: > 0 } choices
+            ? choices[_random.Next(choices.Length)]
+            : skill.SummonFactory;
+        if (factory == null) return;
+
+        var summon = factory();
 
         if (skill.SummonInFront)
         {

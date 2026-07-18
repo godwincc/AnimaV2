@@ -64,6 +64,12 @@ public class Skill
     // escape hatch, same pattern as the other side-effect fields above.
     public Func<Enemy>? SummonFactory { get; set; }
 
+    // Random-choice summon (e.g. Warden of the Hollow's 50/50 add roll): when set, ResolveSummon
+    // picks uniformly at random among these instead of using SummonFactory directly, via
+    // CombatEngine's own _random -- the same "explicit, documented exception" to the "no
+    // randomness in combat" rule the deck shuffle already is.
+    public Func<Enemy>[]? SummonFactoryChoices { get; set; }
+
     // Guard-style summon: the new combatant takes position 1, pushing the caster back to the
     // next open position, instead of the summon just filling the first open slot behind them.
     public bool SummonInFront { get; set; }

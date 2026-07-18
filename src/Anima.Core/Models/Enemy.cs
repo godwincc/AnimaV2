@@ -23,6 +23,27 @@ public class Enemy : ICombatant
     public bool IsEnraged { get; set; } = false;
     public int? EnrageTriggeredRound { get; set; } // Round Enrage actually flipped true; null until then
 
+    // Boss Phase transition — a one-time, flat (non-escalating) damage buff triggered by an HP
+    // threshold rather than a Round number. Deliberately kept separate from Enrage/
+    // EnrageTriggeredRound above: this doesn't escalate, and firing it just sets IsEnraged would
+    // also pull in GetEnrageMultiplier's doubling if EnrageTriggeredRound got set alongside it,
+    // which a boss's Phase 2 buff should NOT do. See Warden of the Hollow.
+    public int? PhaseTwoHpThreshold { get; set; } // null = no Phase 2; else the CurrentHp value it triggers at
+    public double PhaseTwoDamageMultiplier { get; set; } = 1.0; // e.g. 1.5 for Warden's +50% Reckless Fury
+    public bool PhaseTwoTriggered { get; set; } = false;
+    public double PermanentDamageMultiplier { get; set; } = 1.0; // applied once Phase 2 (or similar) triggers
+
+    // Turn-start heal-the-boss passive (e.g. Warden's DPS-race add draining into her each of its
+    // own turns) — checked at the top of ResolveEnemyTurn, so it fires even on a turn where the
+    // add itself is stunned or has no valid attack.
+    public Enemy? HealsOnTurnStartTarget { get; set; }
+    public int HealsOnTurnStartAmount { get; set; }
+
+    // Fires once, the instant this enemy's HP first reaches 0 — e.g. an add rescheduling its
+    // summoner's next-summon cooldown off its own death Round, distinct from PurgeDeadAnimaCards
+    // (which is Anima-only bookkeeping for the shared deck).
+    public Action<CombatState>? OnDeath { get; set; }
+
     public string DisplayName => Name;
 }
 
