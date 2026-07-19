@@ -1,5 +1,6 @@
 using Anima.Core.Enums;
 using Anima.Core.Models;
+using AnimaUnit = Anima.Core.Models.Anima;
 
 namespace Anima.Core.Weaving;
 
@@ -10,6 +11,13 @@ public static class WeavingService
     private const double R2Weight = 0.03125;
     private const double MutationChance = 0.10;
     private const double HybridTriggerChance = 0.33;
+    private const double EchoTriggerChance = 0.05;
+
+    // Locked curve: cost of a parent's 1st through 5th Weave use, indexed by that parent's
+    // WeaveCount going into the attempt (0 -> 1st use's cost, ... 4 -> 5th use's cost). A parent
+    // whose WeaveCount has reached this array's length has exhausted its 5 uses.
+    private static readonly int[] WeaveCostCurve = [50, 100, 175, 275, 400];
+    public const int MaxWeaveCount = 5;
 
     // The two locked hybrid pairings, both directions (parent order doesn't matter).
     private static readonly Dictionary<(AnimaColor, AnimaColor), AnimaColor> HybridPairings = new()
@@ -52,6 +60,77 @@ public static class WeavingService
         };
 
         return new WeavingResult(genome, ColorStats[color], hybridColor is not null, [head, frame, tail, crest]);
+    }
+
+    // Full attempt orchestration: eligibility (lineage + WeaveCount) checked and, if failed,
+    // rejected before anything is rolled or charged. On success, runs one normal Weave, then --
+    // unless forceEcho already committed to it -- rolls the 5% spontaneous Echo chance, but only
+    // if that first Weave did NOT already hybrid-trigger (a separate roll from the 33% hybrid
+    // check, gated behind it so a single attempt can't land both a hybrid AND a twin). If Echo
+    // triggers (spontaneous or forced), a second, fully independent Weave is rolled for the twin
+    // -- genuinely independent, not a copy of the first. Both parents' WeaveCount is incremented
+    // by exactly 1 on success, regardless of whether Echo produced a twin.
+    public static WeaveAttemptResult AttemptWeave(
+        AnimaUnit parentA, AnimaUnit parentB,
+        AnimaGenome genomeA, AnimaGenome genomeB,
+        Random rng, bool forceEcho = false)
+    {
+        if (IsDirectParentChild(parentA, parentB))
+            return WeaveAttemptResult.Rejected(WeaveRejectionReason.DirectParentChild);
+
+        if (AreFullSiblings(parentA, parentB))
+            return WeaveAttemptResult.Rejected(WeaveRejectionReason.FullSiblings);
+
+        if (parentA.WeaveCount >= MaxWeaveCount || parentB.WeaveCount >= MaxWeaveCount)
+            return WeaveAttemptResult.Rejected(WeaveRejectionReason.WeaveCountExhausted);
+
+        var wispCost = GetWeaveCost(parentA.WeaveCount) + GetWeaveCost(parentB.WeaveCount);
+
+        var primary = Weave(genomeA, genomeB, rng);
+
+        WeavingResult? twin = null;
+        var echoTriggered = forceEcho || (!primary.HybridTriggered && rng.NextDouble() < EchoTriggerChance);
+        if (echoTriggered)
+        {
+            twin = Weave(genomeA, genomeB, rng);
+        }
+
+        parentA.WeaveCount++;
+        parentB.WeaveCount++;
+
+        return new WeaveAttemptResult(true, WeaveRejectionReason.None, wispCost, echoTriggered, primary, twin);
+    }
+
+    // A candidate is ineligible if it's a direct parent of the other (either of the other's
+    // ParentAId/ParentBId matches its own Id). Founders (both Ids null) trivially never match.
+    public static bool IsDirectParentChild(AnimaUnit a, AnimaUnit b) =>
+        a.Id == b.ParentAId || a.Id == b.ParentBId || b.Id == a.ParentAId || b.Id == a.ParentBId;
+
+    // Full siblings only -- both candidates must have BOTH parent slots populated with the exact
+    // same pair of Ids (order-independent). Two founders (both null,null) are NOT siblings of each
+    // other -- they simply have no recorded parentage.
+    public static bool AreFullSiblings(AnimaUnit a, AnimaUnit b)
+    {
+        if (a.ParentAId is null || a.ParentBId is null || b.ParentAId is null || b.ParentBId is null)
+            return false;
+
+        return (a.ParentAId == b.ParentAId && a.ParentBId == b.ParentBId)
+            || (a.ParentAId == b.ParentBId && a.ParentBId == b.ParentAId);
+    }
+
+    // Wisp cost of a single parent's Weave use at its current WeaveCount (0-indexed: 0 -> 1st
+    // use). Caller is responsible for actually charging/deducting Wisp -- no run-economy/Wisp-
+    // ledger type exists yet, same scope note as ReforgeService's Wisp-cost handling.
+    public static int GetWeaveCost(int currentWeaveCount)
+    {
+        if (currentWeaveCount < 0 || currentWeaveCount >= WeaveCostCurve.Length)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(currentWeaveCount), currentWeaveCount,
+                $"WeaveCount must be in [0, {WeaveCostCurve.Length}) to have a defined cost.");
+        }
+
+        return WeaveCostCurve[currentWeaveCount];
     }
 
     // Checked before normal color resolution, overriding it if triggered. Per-part resolution
