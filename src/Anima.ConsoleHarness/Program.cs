@@ -635,3 +635,128 @@ ReportBucket("Marked Coin -> Wisp", markedCoinWispCount, MarkedCoinTrials, 0.50)
 ReportBucket("Marked Coin -> Ember", markedCoinEmberCount, MarkedCoinTrials, 0.35);
 ReportBucket("Marked Coin -> EchoShard", markedCoinEchoCount, MarkedCoinTrials, 0.075);
 ReportBucket("Marked Coin -> VesselShard", markedCoinVesselCount, MarkedCoinTrials, 0.075);
+
+// ==== ARTIFACTS (PART 2) — the final 4, completing the full 10-Artifact set ====
+Console.WriteLine();
+Console.WriteLine("================ Artifacts: final 4 (Withering Fang, Focusing Lens, Silent Chime, Ember Core) ================");
+
+// ---- Withering Fang: wasted on a non-combat node, executes the lowest-current-HP enemy on a combat node ----
+var witheringFangNonCombatLedger = new RunLedger();
+witheringFangNonCombatLedger.Artifacts.Add(SampleArtifacts.CreateWitheringFang());
+ArtifactService.OnNodeVisited(witheringFangNonCombatLedger); // non-combat node -- no CombatState passed
+var witheringFangWastedPass = !witheringFangNonCombatLedger.Artifacts.Any(a => a.Name == "Withering Fang");
+Console.WriteLine($"  [{(witheringFangWastedPass ? "PASS" : "FAIL")}] Withering Fang is consumed (wasted, no effect) on a non-combat node visit");
+
+var witheringFangCombatLedger = new RunLedger();
+witheringFangCombatLedger.Artifacts.Add(SampleArtifacts.CreateWitheringFang());
+var witheringFangHighHp = new Enemy { Name = "HighHp", MaxHp = 200, Defense = 0, CurrentHp = 150, Position = 1, Speed = 1, BehaviorRules = [] };
+var witheringFangLowHp = new Enemy { Name = "LowHp", MaxHp = 200, Defense = 0, CurrentHp = 30, Position = 2, Speed = 1, BehaviorRules = [] };
+var witheringFangMidHp = new Enemy { Name = "MidHp", MaxHp = 200, Defense = 0, CurrentHp = 90, Position = 3, Speed = 1, BehaviorRules = [] };
+var witheringFangCombatState = new CombatState { PlayerTeam = [SampleAnimas.CreateEmber()], EnemyTeam = [witheringFangHighHp, witheringFangLowHp, witheringFangMidHp] };
+ArtifactService.OnNodeVisited(witheringFangCombatLedger, witheringFangCombatState);
+var witheringFangExecutePass = witheringFangLowHp.CurrentHp == 1 && witheringFangHighHp.CurrentHp == 150 && witheringFangMidHp.CurrentHp == 90;
+var witheringFangCombatConsumedPass = !witheringFangCombatLedger.Artifacts.Any(a => a.Name == "Withering Fang");
+Console.WriteLine($"  [{(witheringFangExecutePass ? "PASS" : "FAIL")}] Withering Fang sets the lowest-current-HP enemy to exactly 1 HP on a combat node (LowHp: {witheringFangLowHp.CurrentHp}, HighHp: {witheringFangHighHp.CurrentHp}, MidHp: {witheringFangMidHp.CurrentHp})");
+Console.WriteLine($"  [{(witheringFangCombatConsumedPass ? "PASS" : "FAIL")}] Withering Fang is consumed after executing on a combat node too");
+
+// ---- Focusing Lens: triggers exactly on the 4th/8th/12th Attack play, resets between fights ----
+Skill MakeFocusingLensAttack() => new()
+{
+    Name = "Test Strike",
+    Category = SkillCategory.Attack,
+    Range = AttackRange.Melee,
+    Target = TargetType.Enemy,
+    EnergyCost = 0,
+    BaseDamage = 10,
+};
+AnimaUnit MakeArtifactTestAnima(string id, Skill head, Skill frame, Skill tail) => new()
+{
+    Id = id,
+    Color = AnimaColor.Crimson,
+    BaseStats = new Stats { MaxHp = 100, Defense = 0, Speed = 10, DamageMultiplier = 1.0, SpiritMultiplier = 1.0 },
+    Head = head,
+    Frame = frame,
+    Tail = tail,
+    Crest = new Skill { Name = "NoCrest", Category = SkillCategory.Passive, Target = TargetType.SelfTarget },
+    CurrentHp = 100,
+    Position = 1,
+};
+Enemy MakeTankyDummy() => new() { Name = "TankyDummy", MaxHp = 500, Defense = 0, CurrentHp = 500, Position = 1, Speed = 1, BehaviorRules = [] };
+int? ParseFocusingLensTrigger(string line)
+{
+    const string marker = "deals double damage!";
+    if (!line.Contains(marker)) return null;
+    var hashIndex = line.IndexOf('#');
+    var closeParenIndex = line.IndexOf(')', hashIndex);
+    return int.Parse(line[(hashIndex + 1)..closeParenIndex]);
+}
+
+var focusingLensTriggers1 = new List<int>();
+var focusingLensAnima1 = MakeArtifactTestAnima("FocusingLensTester1", MakeFocusingLensAttack(), MakeFocusingLensAttack(), MakeFocusingLensAttack());
+var focusingLensState1 = new CombatState { PlayerTeam = [focusingLensAnima1], EnemyTeam = [MakeTankyDummy()] };
+var focusingLensEngine1 = new CombatEngine(focusingLensState1, [SampleArtifacts.CreateFocusingLens()]);
+focusingLensEngine1.ChoosePlayerSkill = (a, s) => s.Hand.FirstOrDefault();
+focusingLensEngine1.OnLog = line => { if (ParseFocusingLensTrigger(line) is int n) focusingLensTriggers1.Add(n); };
+focusingLensEngine1.StartCombat();
+for (var i = 0; i < 12; i++) focusingLensEngine1.RunRound();
+var focusingLensFirstFightPass = focusingLensTriggers1.SequenceEqual(new[] { 4, 8, 12 });
+Console.WriteLine($"  [{(focusingLensFirstFightPass ? "PASS" : "FAIL")}] Focusing Lens triggers exactly on attacks #4, #8, #12 across 12 plays (observed: {string.Join(",", focusingLensTriggers1)})");
+
+var focusingLensTriggers2 = new List<int>();
+var focusingLensAnima2 = MakeArtifactTestAnima("FocusingLensTester2", MakeFocusingLensAttack(), MakeFocusingLensAttack(), MakeFocusingLensAttack());
+var focusingLensState2 = new CombatState { PlayerTeam = [focusingLensAnima2], EnemyTeam = [MakeTankyDummy()] };
+var focusingLensEngine2 = new CombatEngine(focusingLensState2, [SampleArtifacts.CreateFocusingLens()]);
+focusingLensEngine2.ChoosePlayerSkill = (a, s) => s.Hand.FirstOrDefault();
+focusingLensEngine2.OnLog = line => { if (ParseFocusingLensTrigger(line) is int n) focusingLensTriggers2.Add(n); };
+focusingLensEngine2.StartCombat();
+for (var i = 0; i < 4; i++) focusingLensEngine2.RunRound();
+var focusingLensResetPass = focusingLensTriggers2.SequenceEqual(new[] { 4 });
+Console.WriteLine($"  [{(focusingLensResetPass ? "PASS" : "FAIL")}] Focusing Lens's counter resets in a fresh combat (2nd fight's own attack #4 triggers again, observed: {string.Join(",", focusingLensTriggers2)})");
+
+// ---- Silent Chime: grants exactly one extra action, then is used up for the rest of the Delve ----
+var silentChimeRunLedger = new RunLedger();
+silentChimeRunLedger.Artifacts.Add(SampleArtifacts.CreateSilentChime());
+
+var chimeAnima = MakeArtifactTestAnima("SilentChimeTester", MakeFocusingLensAttack(), MakeFocusingLensAttack(), MakeFocusingLensAttack());
+var chimeActionsPlayed = 0;
+var chimeState = new CombatState { PlayerTeam = [chimeAnima], EnemyTeam = [MakeTankyDummy()] };
+var chimeEngine = new CombatEngine(chimeState);
+chimeEngine.ChoosePlayerSkill = (a, s) => { chimeActionsPlayed++; return s.Hand.FirstOrDefault(); };
+chimeEngine.StartCombat();
+
+var chimeActivated = chimeEngine.TryActivateSilentChime(chimeAnima, silentChimeRunLedger);
+chimeEngine.RunRound(); // chimeAnima should act TWICE this Round: its normal turn + the Silent Chime extra action
+var chimeActionsAfterActivatedRound = chimeActionsPlayed;
+var chimeStillOwnedAfterUse = silentChimeRunLedger.Artifacts.Any(a => a.Name == "Silent Chime");
+
+var chimeSecondActivationAttempt = chimeEngine.TryActivateSilentChime(chimeAnima, silentChimeRunLedger); // already used -- should fail
+chimeEngine.RunRound();
+var chimeActionsAfterSecondRound = chimeActionsPlayed;
+
+var chimeGrantedExtraPass = chimeActivated && chimeActionsAfterActivatedRound == 2;
+var chimeConsumedPass = !chimeStillOwnedAfterUse;
+var chimeSingleUsePass = !chimeSecondActivationAttempt && (chimeActionsAfterSecondRound - chimeActionsAfterActivatedRound) == 1;
+
+Console.WriteLine($"  [{(chimeGrantedExtraPass ? "PASS" : "FAIL")}] Silent Chime grants exactly one extra action in its activated Round (actions played: {chimeActionsAfterActivatedRound})");
+Console.WriteLine($"  [{(chimeConsumedPass ? "PASS" : "FAIL")}] Silent Chime is removed from RunLedger.Artifacts immediately on activation");
+Console.WriteLine($"  [{(chimeSingleUsePass ? "PASS" : "FAIL")}] Silent Chime cannot be re-activated after being used (2nd attempt returned {chimeSecondActivationAttempt}, next Round played only {chimeActionsAfterSecondRound - chimeActionsAfterActivatedRound} action)");
+
+// ---- Ember Core: discounts a sample Reforge cost by 20% ----
+var emberCoreRunLedger = new RunLedger();
+emberCoreRunLedger.Artifacts.Add(SampleArtifacts.CreateEmberCore());
+var emberCoreRng = new Random(2468);
+var emberCoreOffer = ReforgeService.RollOffer(emberCoreRng);
+
+var emberCoreLedger = new PersistentLedger();
+emberCoreLedger.Add(ResourceType.Wisp, emberCoreOffer.AcceptCost); // full price -- discount should leave leftover
+var emberCoreAcceptSuccess = ReforgeService.Accept(emberCoreOffer, SampleAnimas.CreateEmber(), emberCoreLedger, emberCoreRunLedger);
+var expectedDiscountedCost = (int)Math.Round(emberCoreOffer.AcceptCost * 0.8);
+var expectedLeftover = emberCoreOffer.AcceptCost - expectedDiscountedCost;
+var emberCorePass = emberCoreAcceptSuccess && emberCoreLedger.GetBalance(ResourceType.Wisp) == expectedLeftover;
+Console.WriteLine($"  [{(emberCorePass ? "PASS" : "FAIL")}] Ember Core discounts a Reforge Accept by 20% (full price {emberCoreOffer.AcceptCost} -> discounted {expectedDiscountedCost}, {expectedLeftover} Wisp left over)");
+
+var noEmberCoreLedger = new PersistentLedger();
+noEmberCoreLedger.Add(ResourceType.Wisp, emberCoreOffer.AcceptCost);
+var noEmberCoreAcceptSuccess = ReforgeService.Accept(emberCoreOffer, SampleAnimas.CreateEmber(), noEmberCoreLedger); // no runLedger -- baseline
+var noEmberCorePass = noEmberCoreAcceptSuccess && noEmberCoreLedger.GetBalance(ResourceType.Wisp) == 0;
+Console.WriteLine($"  [{(noEmberCorePass ? "PASS" : "FAIL")}] Baseline Reforge Accept (no Artifact) charges full price ({emberCoreOffer.AcceptCost} -> {noEmberCoreLedger.GetBalance(ResourceType.Wisp)})");

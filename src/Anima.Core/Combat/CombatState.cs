@@ -16,4 +16,9 @@ public class CombatState
     // combat. Never reset mid-combat -- a fresh CombatState is constructed per combat, so this
     // naturally resets between fights with no extra plumbing needed.
     public bool TwinFlameUsed { get; set; }
+
+    // Focusing Lens Artifact: counts Attack-category skills played by the PLAYER team this
+    // combat (team-wide, not per-Anima -- same "shared resource" shape as SharedEnergy). Resets
+    // between fights the same way TwinFlameUsed does, for free, via a fresh CombatState per combat.
+    public int AttackSkillsPlayed { get; set; }
 }

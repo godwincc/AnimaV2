@@ -1,5 +1,6 @@
 namespace Anima.Core.Combat;
 
+using Anima.Core.Economy;
 using Anima.Core.Enums;
 using Anima.Core.Models;
 
@@ -20,10 +21,16 @@ public class CombatEngine
     private const double ExposedMultiplier = 1.25;
     private const double InspireSharePercent = 0.3;
     private const int BarrierStoneShieldAmount = 5; // not specified anywhere -- a small, flat, first-pass value
+    private const int FocusingLensInterval = 4;
+    private const double FocusingLensMultiplier = 2.0;
 
     // This Round's Initiative order, captured once per Round so Ambush can check whether the
     // acting combatant is literally the last entry in it (see GetOffensiveCrestMultiplier).
     private List<ICombatant> _currentInitiativeOrder = new();
+
+    // Silent Chime: set by TryActivateSilentChime, consumed by ActionPhase the moment this
+    // Anima's normal turn resolves this Round -- see both for the full mechanic.
+    private Anima? _pendingExtraActionAnima;
 
     // Narration hook — kept out of Core so callers (console, UI, tests) decide how/whether to surface it.
     public Action<string>? OnLog { get; set; }
@@ -98,6 +105,22 @@ public class CombatEngine
         LogInitiativeOrder(initiativeOrder);
         ActionPhase(initiativeOrder);
         RoundEndPhase();
+    }
+
+    // Silent Chime: single-use per Delve, so activating it consumes the Artifact from runLedger
+    // immediately (mirrors Withering Fang's "consumed on use" pattern in ArtifactService) --
+    // returns false and does nothing if it isn't owned/already used. The extra action itself is
+    // granted later, by ActionPhase, the moment `target`'s normal turn resolves in whichever
+    // Round is running when this was called -- there's no mid-Round player-decision loop yet, so
+    // the caller is expected to activate before calling RunRound() for the Round they want it in.
+    public bool TryActivateSilentChime(Anima target, RunLedger runLedger)
+    {
+        var silentChime = runLedger.Artifacts.FirstOrDefault(a => a.Name == "Silent Chime");
+        if (silentChime == null) return false;
+
+        runLedger.Artifacts.Remove(silentChime);
+        _pendingExtraActionAnima = target;
+        return true;
     }
 
     private void RoundStartPhase()
@@ -209,6 +232,16 @@ public class CombatEngine
                     ResolveEnemyTurn(enemy);
                     break;
             }
+
+            // Silent Chime: grants the targeted Anima one immediate extra action right after
+            // their current action resolves, within the same Round -- checked here, right after
+            // the normal turn above, rather than re-entering the initiative loop.
+            if (actor is Anima chimeTarget && ReferenceEquals(_pendingExtraActionAnima, chimeTarget) && chimeTarget.CurrentHp > 0)
+            {
+                _pendingExtraActionAnima = null;
+                Log($"  Silent Chime grants {chimeTarget.DisplayName} an extra action!");
+                ResolvePlayerTurn(chimeTarget);
+            }
         }
     }
 
@@ -258,13 +291,33 @@ public class CombatEngine
         var energyCost = GetEffectiveEnergyCost(anima, skill);
         Log($"{anima.DisplayName} uses {skill.Name} ({energyCost} energy).");
         _state.SharedEnergy -= energyCost;
+
+        // Focusing Lens: every 4th Attack-category skill the PLAYER TEAM plays this combat
+        // (team-wide counter, same shape as SharedEnergy) deals double damage -- decided once
+        // here, the moment the skill is confirmed to actually resolve, then threaded through
+        // ResolveSkill/ResolveAttack/ResolveSingleTargetAttack the same way frenzied/weakMagnitude
+        // already are, rather than re-checking a persistent "count % 4 == 0" state deeper in the
+        // pipeline (which could spuriously re-trigger on an unrelated later hit, e.g. a
+        // Retaliate/Thorns counter, while the counter happens to still read a multiple of 4).
+        var focusingLensTriggered = false;
+        if (skill.Category == SkillCategory.Attack && HasArtifact("Focusing Lens"))
+        {
+            _state.AttackSkillsPlayed++;
+            focusingLensTriggered = _state.AttackSkillsPlayed % FocusingLensInterval == 0;
+            if (focusingLensTriggered)
+            {
+                Log($"  Focusing Lens triggers: {anima.DisplayName}'s attack (#{_state.AttackSkillsPlayed}) deals double damage!");
+            }
+        }
+
         ResolveSkill(
             anima,
             skill,
             _state.EnemyTeam.Cast<ICombatant>().ToList(),
             _state.PlayerTeam.Cast<ICombatant>().ToList(),
             anima.BaseStats.DamageMultiplier,
-            anima.BaseStats.SpiritMultiplier);
+            anima.BaseStats.SpiritMultiplier,
+            focusingLensTriggered);
 
         _state.Hand.Remove(skill);
         _state.DiscardPile.Add(skill);
@@ -315,7 +368,8 @@ public class CombatEngine
         List<ICombatant> opposingTeam,
         List<ICombatant> friendlyTeam,
         double damageMultiplier,
-        double spiritMultiplier)
+        double spiritMultiplier,
+        bool focusingLensTriggered = false)
     {
         // Weak is Until-Consumed (same pattern as Shield/Primed) — it persists on its target
         // until that target's next skill use of any kind, regardless of Round/turn-order timing.
@@ -329,7 +383,7 @@ public class CombatEngine
         switch (skill.Category)
         {
             case SkillCategory.Attack:
-                ResolveAttack(actor, skill, opposingTeam, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied);
+                ResolveAttack(actor, skill, opposingTeam, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied, focusingLensTriggered);
                 break;
             case SkillCategory.Move:
                 ResolveMove(actor, skill, opposingTeam, friendlyTeam);
@@ -426,7 +480,8 @@ public class CombatEngine
         double damageMultiplier,
         double spiritMultiplier,
         int weakMagnitude,
-        bool frenzied = false)
+        bool frenzied = false,
+        bool focusingLensTriggered = false)
     {
         // AoE Attack (e.g. an "AoE Damage" augment converting Slash to hit everyone): repeats the
         // full single-target pipeline once per living enemy -- BaseDamage is expected to already
@@ -438,7 +493,7 @@ public class CombatEngine
             foreach (var aoeTarget in opposingTeam.Where(c => c.CurrentHp > 0).ToList())
             {
                 if (aoeTarget.CurrentHp <= 0) continue; // may have died earlier in this same AoE sweep
-                ResolveSingleTargetAttack(actor, skill, aoeTarget, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied);
+                ResolveSingleTargetAttack(actor, skill, aoeTarget, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied, focusingLensTriggered);
             }
             return;
         }
@@ -450,7 +505,7 @@ public class CombatEngine
             return;
         }
 
-        ResolveSingleTargetAttack(actor, skill, target, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied);
+        ResolveSingleTargetAttack(actor, skill, target, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied, focusingLensTriggered);
     }
 
     private void ResolveSingleTargetAttack(
@@ -461,7 +516,8 @@ public class CombatEngine
         double damageMultiplier,
         double spiritMultiplier,
         int weakMagnitude,
-        bool frenzied)
+        bool frenzied,
+        bool focusingLensTriggered = false)
     {
         if (skill.Target is TargetType.Enemy or TargetType.Ally)
         {
@@ -498,6 +554,14 @@ public class CombatEngine
         {
             raw *= FrenzyMultiplier;
             Log($"  {actor.DisplayName}'s Frenzy triggers: damage x{FrenzyMultiplier:0.##}.");
+        }
+
+        // Focusing Lens: the "is this the 4th/8th/12th attack" decision was already made once,
+        // upstream in ResolvePlayerTurn -- this just applies it, same as frenzied above.
+        if (focusingLensTriggered)
+        {
+            raw *= FocusingLensMultiplier;
+            Log($"  {actor.DisplayName}'s Focusing Lens triggers: damage x{FocusingLensMultiplier:0.##}.");
         }
 
         if (weakMagnitude > 0)

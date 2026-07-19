@@ -3,23 +3,28 @@ namespace Anima.Core.Data;
 using Anima.Core.Economy;
 using Anima.Core.Models;
 
-// SAMPLE / REFERENCE DATA — validates the Artifact + OnCombatStart/OnPickup hook patterns
-// end-to-end, plus a first pass at the 6 real Delve-scoped (run-only, no cross-Delve persistence)
-// Artifacts. Not the final itemization set. All 6 are checked purely by Name string -- either via
-// a hook field (OnCombatStart/OnPickup, for effects a plain delegate can express) or a direct
-// name check inside CombatEngine/RewardService (for effects needing engine-internal state/logic
-// a delegate can't reach, e.g. DrawCards' pile-recycling or the once-per-combat Twin Flame flag)
-// -- same "no event bus, direct checks at known checkpoints" pattern the rest of the codebase
-// already uses for Crest passives.
+// A first pass at the full 10-Artifact set -- all Delve-scoped (run-only, no cross-Delve
+// persistence). Each is checked purely by Name string -- either via a hook field
+// (OnCombatStart/OnPickup, for effects a plain delegate can express) or a direct name check
+// inside CombatEngine/RewardService/ArtifactService (for effects needing engine-internal state/
+// logic a delegate can't reach, e.g. DrawCards' pile-recycling, the once-per-combat Twin Flame
+// flag, or Focusing Lens's per-combat attack counter) -- same "no event bus, direct checks at
+// known checkpoints" pattern the rest of the codebase already uses for Crest passives. Not the
+// final balance pass, but the mechanics are locked.
 public static class SampleArtifacts
 {
+    // REDEFINED from an earlier hook-validation placeholder (which only proved OnCombatStart
+    // actually fires -- Vanguard's Bell now demonstrates that instead) to its real design-doc
+    // effect: Shop prices are discounted for as long as this is owned. Checked directly by name
+    // via ArtifactService.ApplyEmberCoreDiscount, wired into ReforgeService.Accept today --
+    // Augment costs have no pricing system to discount yet (flagged, not invented; see
+    // ArtifactService's own comment).
     public static Artifact CreateEmberCore()
     {
         return new Artifact
         {
             Name = "Ember Core",
-            Description = "At the start of combat, gain 1 additional shared energy.",
-            OnCombatStart = state => state.SharedEnergy += 1,
+            Description = "Reforge and Augment costs are reduced by 20% for the rest of the Delve.",
         };
     }
 
@@ -91,6 +96,43 @@ public static class SampleArtifacts
             Name = "Marked Coin",
             Description = "On pickup, immediately grants one random bonus resource.",
             OnPickup = RewardService.GrantMarkedCoinBonus,
+        };
+    }
+
+    // Checked directly via ArtifactService.OnNodeVisited -- a single consumable charge, removed
+    // from RunLedger.Artifacts the moment it's consumed (wasted on a non-combat node, or used to
+    // execute the lowest-current-HP enemy on a combat node). No hook field fits since the Run
+    // layer that would call OnNodeVisited automatically doesn't exist yet.
+    public static Artifact CreateWitheringFang()
+    {
+        return new Artifact
+        {
+            Name = "Withering Fang",
+            Description = "Consumed on the next node visited. If that node has combat, sets the lowest-current-HP enemy to exactly 1 HP; otherwise wasted with no effect.",
+        };
+    }
+
+    // Checked directly by name in CombatEngine.ResolvePlayerTurn/ResolveSingleTargetAttack --
+    // needs CombatState.AttackSkillsPlayed's own per-combat counter, which a stateless hook
+    // delegate can't carry (see CombatState/CombatEngine's own comments).
+    public static Artifact CreateFocusingLens()
+    {
+        return new Artifact
+        {
+            Name = "Focusing Lens",
+            Description = "Every 4th Attack-category skill played this combat deals double damage. The counter resets each fight.",
+        };
+    }
+
+    // Activated via CombatEngine.TryActivateSilentChime rather than a hook field -- it's a
+    // player-chosen, mid-Round action (which Anima, which Round) rather than a passive that fires
+    // on a fixed trigger the way every other Artifact here does.
+    public static Artifact CreateSilentChime()
+    {
+        return new Artifact
+        {
+            Name = "Silent Chime",
+            Description = "Single-use per Delve. When activated, grants one chosen Anima an immediate extra action right after their current action resolves, within the same Round.",
         };
     }
 }

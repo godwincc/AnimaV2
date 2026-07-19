@@ -25,16 +25,18 @@ public static class ReforgeService
         return new ReforgeOffer(candidate, chosenColor is not null);
     }
 
-    // Checks affordability and deducts offer.AcceptCost Wisp from ledger BEFORE swapping anything
-    // -- returns false (and leaves target/ledger untouched) if the player can't afford it. Swaps
+    // Checks affordability and deducts offer.AcceptCost Wisp (discounted by Ember Core, if owned
+    // -- see ArtifactService.ApplyEmberCoreDiscount) from ledger BEFORE swapping anything --
+    // returns false (and leaves target/ledger untouched) if the player can't afford it. Swaps
     // the offer's part onto target's matching slot. Run-only mutation -- caller reverts it when
     // the Delve ends, this never touches permanent/saved Anima data (there's nowhere to persist it
     // to yet regardless). Any Augment on the replaced skill is lost: Augments mutate a Skill
     // instance's fields in place elsewhere in the codebase, and that instance is simply dropped
     // here in favor of a fresh clone of the rolled one.
-    public static bool Accept(ReforgeOffer offer, AnimaUnit target, PersistentLedger ledger)
+    public static bool Accept(ReforgeOffer offer, AnimaUnit target, PersistentLedger ledger, RunLedger? runLedger = null)
     {
-        if (!ledger.TrySpend(ResourceType.Wisp, offer.AcceptCost)) return false;
+        var cost = ArtifactService.ApplyEmberCoreDiscount(offer.AcceptCost, runLedger);
+        if (!ledger.TrySpend(ResourceType.Wisp, cost)) return false;
 
         var skill = offer.Candidate.Skill.Clone();
         switch (skill.Part)
