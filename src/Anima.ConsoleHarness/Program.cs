@@ -1,6 +1,8 @@
+using Anima.Core.Combat;
 using Anima.Core.Data;
 using Anima.Core.Economy;
 using Anima.Core.Enums;
+using Anima.Core.Models;
 using Anima.Core.Reforge;
 using Anima.Core.Weaving;
 using AnimaUnit = Anima.Core.Models.Anima;
@@ -471,3 +473,165 @@ var wispOrderingPass = RewardService.ResourceNodeWisp < RewardService.CombatWinW
     && RewardService.CombatWinWisp < RewardService.EliteWinWisp
     && RewardService.EliteWinWisp < RewardService.BossWinWisp;
 Console.WriteLine($"  [{(wispOrderingPass ? "PASS" : "FAIL")}] Wisp reward tier ladder holds: Resource({RewardService.ResourceNodeWisp}) < Combat({RewardService.CombatWinWisp}) < Elite({RewardService.EliteWinWisp}) < Boss({RewardService.BossWinWisp})");
+
+// ==== ARTIFACTS — first pass at 6 Delve-scoped (run-only) Artifacts ====
+// Twin Flame, Barrier Stone, Vanguard's Bell, and Weaver's Thread are combat-time effects, so
+// they're driven through a real (minimal) CombatEngine fight rather than called directly -- the
+// same public API (StartCombat/RunRound) a real caller would use. Wisp Charm and Marked Coin are
+// pure Economy-layer effects, tested directly against RewardService/ArtifactService.
+
+Console.WriteLine();
+Console.WriteLine("================ Artifacts: 6 Delve-scoped Artifacts ================");
+
+// Passive dummy enemy (empty BehaviorRules -- always "has no valid action") so a test round can
+// isolate a Round-Start/combat-start effect without any incoming damage muddying the result.
+Enemy MakeDummyEnemy() => new()
+{
+    Name = "Dummy",
+    MaxHp = 50,
+    Defense = 0,
+    CurrentHp = 50,
+    Position = 1,
+    Speed = 1,
+    BehaviorRules = [],
+};
+
+int EmberSum(PersistentLedger l) =>
+    l.GetBalance(ResourceType.EmberCrimson) + l.GetBalance(ResourceType.EmberOnyx)
+    + l.GetBalance(ResourceType.EmberVerdant) + l.GetBalance(ResourceType.EmberAzure);
+
+// ---- Twin Flame: saves exactly once per combat, then stops ----
+var twinFlameAnima = SampleAnimas.CreateEmber();
+twinFlameAnima.CurrentHp = 5;
+
+var lethalStrike = new Skill
+{
+    Name = "Lethal Strike",
+    Category = SkillCategory.Attack,
+    Range = AttackRange.Melee,
+    Target = TargetType.Enemy,
+    EnergyCost = 0,
+    BaseDamage = 999,
+};
+var lethalStriker = new Enemy
+{
+    Name = "LethalStriker",
+    MaxHp = 100,
+    Defense = 0,
+    CurrentHp = 100,
+    Position = 1,
+    Speed = 1,
+    BehaviorRules = [new EnemyBehaviorRule { Condition = (_, _) => true, Skill = lethalStrike }],
+};
+
+var twinFlameState = new CombatState { PlayerTeam = [twinFlameAnima], EnemyTeam = [lethalStriker] };
+var twinFlameEngine = new CombatEngine(twinFlameState, [SampleArtifacts.CreateTwinFlame()]);
+twinFlameEngine.StartCombat();
+twinFlameEngine.RunRound(); // lethal hit #1 -- should be saved at 1 HP
+var twinFlameSavedAt1 = twinFlameAnima.CurrentHp == 1;
+twinFlameEngine.RunRound(); // lethal hit #2 -- Twin Flame already used, should NOT save again
+var twinFlameDiedSecondHit = twinFlameAnima.CurrentHp == 0;
+Console.WriteLine($"  [{(twinFlameSavedAt1 ? "PASS" : "FAIL")}] Twin Flame saves the first lethal hit at exactly 1 HP (HP: {(twinFlameSavedAt1 ? 1 : twinFlameAnima.CurrentHp)})");
+Console.WriteLine($"  [{(twinFlameDiedSecondHit ? "PASS" : "FAIL")}] Twin Flame does NOT save a second lethal hit in the same combat (HP: {twinFlameAnima.CurrentHp})");
+
+// ---- Barrier Stone: grants Shield to the whole team at every Round Start ----
+var barrierAnimaA = SampleAnimas.CreateEmber();
+var barrierAnimaB = SampleAnimas.CreateReaper();
+barrierAnimaB.Position = 2;
+
+var barrierState = new CombatState { PlayerTeam = [barrierAnimaA, barrierAnimaB], EnemyTeam = [MakeDummyEnemy()] };
+var barrierEngine = new CombatEngine(barrierState, [SampleArtifacts.CreateBarrierStone()]);
+barrierEngine.StartCombat();
+barrierEngine.RunRound();
+var barrierShieldA = barrierAnimaA.ActiveStatuses.FirstOrDefault(s => s.Keyword == "Shield")?.Magnitude;
+var barrierShieldB = barrierAnimaB.ActiveStatuses.FirstOrDefault(s => s.Keyword == "Shield")?.Magnitude;
+var barrierPass = barrierShieldA == 5 && barrierShieldB == 5;
+Console.WriteLine($"  [{(barrierPass ? "PASS" : "FAIL")}] Barrier Stone grants +5 Shield to the whole team at Round Start (A: {barrierShieldA?.ToString() ?? "none"}, B: {barrierShieldB?.ToString() ?? "none"})");
+
+// ---- Vanguard's Bell: +1 starting Energy, Round 1 only ----
+var noBellState = new CombatState { PlayerTeam = [SampleAnimas.CreateEmber()], EnemyTeam = [MakeDummyEnemy()] };
+new CombatEngine(noBellState).StartCombat();
+var baselineEnergyPass = noBellState.SharedEnergy == 3;
+
+var bellState = new CombatState { PlayerTeam = [SampleAnimas.CreateEmber()], EnemyTeam = [MakeDummyEnemy()] };
+new CombatEngine(bellState, [SampleArtifacts.CreateVanguardsBell()]).StartCombat();
+var bellPass = bellState.SharedEnergy == 4;
+Console.WriteLine($"  [{(baselineEnergyPass ? "PASS" : "FAIL")}] Baseline starting Energy (no Artifact) is 3 (observed {noBellState.SharedEnergy})");
+Console.WriteLine($"  [{(bellPass ? "PASS" : "FAIL")}] Vanguard's Bell grants +1 starting Energy (observed {bellState.SharedEnergy})");
+
+// ---- Weaver's Thread: +1 opening hand card, 7 -> 8 ----
+var noThreadState = new CombatState { PlayerTeam = [SampleAnimas.CreateEmber()], EnemyTeam = [MakeDummyEnemy()] };
+new CombatEngine(noThreadState).StartCombat();
+var baselineHandPass = noThreadState.Hand.Count == 7;
+
+var threadState = new CombatState { PlayerTeam = [SampleAnimas.CreateEmber()], EnemyTeam = [MakeDummyEnemy()] };
+new CombatEngine(threadState, [SampleArtifacts.CreateWeaversThread()]).StartCombat();
+var threadPass = threadState.Hand.Count == 8;
+Console.WriteLine($"  [{(baselineHandPass ? "PASS" : "FAIL")}] Baseline opening hand (no Artifact) is 7 cards (observed {noThreadState.Hand.Count})");
+Console.WriteLine($"  [{(threadPass ? "PASS" : "FAIL")}] Weaver's Thread grants an 8-card opening hand (observed {threadState.Hand.Count})");
+
+// ---- Wisp Charm: +20% Wisp on every reward type ----
+Console.WriteLine();
+var wispCharmRunLedger = new RunLedger();
+wispCharmRunLedger.Artifacts.Add(SampleArtifacts.CreateWispCharm());
+var wispCharmRng = new Random(555);
+
+var wispCharmCombatLedger = new PersistentLedger();
+RewardService.GrantCombatWin(wispCharmCombatLedger, wispCharmRng, wispCharmRunLedger);
+var wispCharmCombatPass = wispCharmCombatLedger.GetBalance(ResourceType.Wisp) == (int)Math.Round(RewardService.CombatWinWisp * 1.2);
+
+var wispCharmBossLedger = new PersistentLedger();
+RewardService.GrantBossWin(wispCharmBossLedger, wispCharmRng, wispCharmRunLedger);
+var wispCharmBossPass = wispCharmBossLedger.GetBalance(ResourceType.Wisp) == (int)Math.Round(RewardService.BossWinWisp * 1.2);
+
+var noWispCharmLedger = new PersistentLedger();
+RewardService.GrantCombatWin(noWispCharmLedger, wispCharmRng); // no runLedger -- baseline, unboosted
+var noWispCharmPass = noWispCharmLedger.GetBalance(ResourceType.Wisp) == RewardService.CombatWinWisp;
+
+Console.WriteLine($"  [{(noWispCharmPass ? "PASS" : "FAIL")}] Baseline Combat win Wisp (no Artifact) is unboosted ({RewardService.CombatWinWisp} -> {noWispCharmLedger.GetBalance(ResourceType.Wisp)})");
+Console.WriteLine($"  [{(wispCharmCombatPass ? "PASS" : "FAIL")}] Wisp Charm boosts Combat win Wisp by exactly 20% ({RewardService.CombatWinWisp} -> {wispCharmCombatLedger.GetBalance(ResourceType.Wisp)}, expected {(int)Math.Round(RewardService.CombatWinWisp * 1.2)})");
+Console.WriteLine($"  [{(wispCharmBossPass ? "PASS" : "FAIL")}] Wisp Charm boosts Boss win Wisp by exactly 20% ({RewardService.BossWinWisp} -> {wispCharmBossLedger.GetBalance(ResourceType.Wisp)}, expected {(int)Math.Round(RewardService.BossWinWisp * 1.2)})");
+
+// ---- Marked Coin: grants a resource immediately on pickup ----
+Console.WriteLine();
+const int MarkedCoinTrials = 4000;
+var markedCoin = SampleArtifacts.CreateMarkedCoin();
+var markedCoinRunLedger = new RunLedger();
+var markedCoinLedger = new PersistentLedger();
+var markedCoinRng = new Random(31415);
+
+var markedCoinWispCount = 0;
+var markedCoinEmberCount = 0;
+var markedCoinEchoCount = 0;
+var markedCoinVesselCount = 0;
+var markedCoinBadTrial = false;
+for (var i = 0; i < MarkedCoinTrials; i++)
+{
+    var wispBefore = markedCoinLedger.GetBalance(ResourceType.Wisp);
+    var emberBefore = EmberSum(markedCoinLedger);
+    var echoBefore = markedCoinLedger.GetBalance(ResourceType.EchoShard);
+    var vesselBefore = markedCoinLedger.GetBalance(ResourceType.VesselShard);
+
+    ArtifactService.Grant(markedCoinRunLedger, markedCoin, markedCoinLedger, markedCoinRng);
+
+    var wispHit = markedCoinLedger.GetBalance(ResourceType.Wisp) > wispBefore;
+    var emberHit = EmberSum(markedCoinLedger) > emberBefore;
+    var echoHit = markedCoinLedger.GetBalance(ResourceType.EchoShard) > echoBefore;
+    var vesselHit = markedCoinLedger.GetBalance(ResourceType.VesselShard) > vesselBefore;
+
+    var hitCount = (wispHit ? 1 : 0) + (emberHit ? 1 : 0) + (echoHit ? 1 : 0) + (vesselHit ? 1 : 0);
+    if (hitCount != 1) markedCoinBadTrial = true;
+
+    if (wispHit) markedCoinWispCount++;
+    if (emberHit) markedCoinEmberCount++;
+    if (echoHit) markedCoinEchoCount++;
+    if (vesselHit) markedCoinVesselCount++;
+}
+
+var markedCoinAddedPass = markedCoinRunLedger.Artifacts.Count == MarkedCoinTrials;
+Console.WriteLine($"  [{(markedCoinAddedPass ? "PASS" : "FAIL")}] Each pickup call adds Marked Coin to RunLedger.Artifacts ({markedCoinRunLedger.Artifacts.Count}/{MarkedCoinTrials})");
+Console.WriteLine($"  [{(!markedCoinBadTrial ? "PASS" : "FAIL")}] Every pickup grants EXACTLY ONE resource type, never zero or multiple");
+ReportBucket("Marked Coin -> Wisp", markedCoinWispCount, MarkedCoinTrials, 0.50);
+ReportBucket("Marked Coin -> Ember", markedCoinEmberCount, MarkedCoinTrials, 0.35);
+ReportBucket("Marked Coin -> EchoShard", markedCoinEchoCount, MarkedCoinTrials, 0.075);
+ReportBucket("Marked Coin -> VesselShard", markedCoinVesselCount, MarkedCoinTrials, 0.075);

@@ -6,6 +6,7 @@ using Anima.Core.Models;
 public class CombatEngine
 {
     private readonly CombatState _state;
+    private readonly List<Artifact> _ownedArtifacts;
     private readonly Random _random = new();
 
     private const int HandCap = 10;
@@ -18,6 +19,7 @@ public class CombatEngine
     private const double SteadyAimMultiplier = 1.15;
     private const double ExposedMultiplier = 1.25;
     private const double InspireSharePercent = 0.3;
+    private const int BarrierStoneShieldAmount = 5; // not specified anywhere -- a small, flat, first-pass value
 
     // This Round's Initiative order, captured once per Round so Ambush can check whether the
     // acting combatant is literally the last entry in it (see GetOffensiveCrestMultiplier).
@@ -29,18 +31,37 @@ public class CombatEngine
     // Placeholder for real player input / AI; the harness supplies a hardcoded priority for now.
     public Func<Anima, CombatState, Skill?>? ChoosePlayerSkill { get; set; }
 
-    public CombatEngine(CombatState state)
+    // ownedArtifacts: the Artifacts currently owned for this Delve (typically RunLedger.Artifacts)
+    // -- optional so every existing call site with no Artifacts in play still compiles unchanged.
+    public CombatEngine(CombatState state, IReadOnlyList<Artifact>? ownedArtifacts = null)
     {
         _state = state;
+        _ownedArtifacts = ownedArtifacts?.ToList() ?? [];
     }
 
+    private bool HasArtifact(string name) => _ownedArtifacts.Any(a => a.Name == name);
+
     // Builds the shared 27-card team deck (Head/Frame/Tail x3 copies each, Crests excluded),
-    // shuffles it, and draws the opening hand of 7. Call once before the first RunRound().
+    // shuffles it, and draws the opening hand of 7 (8 with Weaver's Thread). Call once before
+    // the first RunRound().
     public void StartCombat()
     {
         BuildDeck();
         Shuffle(_state.DrawPile);
-        DrawCards(7);
+
+        // Fires every owned Artifact's OnCombatStart hook (e.g. Vanguard's Bell's +1 starting
+        // Energy) -- the hook was already declared on the Artifact model but never actually
+        // invoked anywhere until now.
+        foreach (var artifact in _ownedArtifacts)
+        {
+            artifact.OnCombatStart?.Invoke(_state);
+        }
+
+        // Weaver's Thread: +1 card in the opening hand (7 -> 8). Needs DrawCards' own draw-pile/
+        // shuffle-recycle logic, which a plain Action<CombatState> hook can't express -- checked
+        // directly here instead, same pattern as every Crest passive elsewhere in this file.
+        var openingHandSize = HasArtifact("Weaver's Thread") ? 8 : 7;
+        DrawCards(openingHandSize);
     }
 
     private void BuildDeck()
@@ -92,6 +113,19 @@ public class CombatEngine
         foreach (var combatant in AllCombatants())
         {
             TickStatusDurations(combatant);
+        }
+
+        // Barrier Stone: +5 flat Shield to the WHOLE owning team (not one slot) at every Round
+        // Start -- an AoE-shaped ward, same reward shape as Ward's own AllAllies Shield skill,
+        // rather than picking one arbitrary position to favor.
+        if (HasArtifact("Barrier Stone"))
+        {
+            var playerTeam = _state.PlayerTeam.Cast<ICombatant>().ToList();
+            foreach (var ally in playerTeam.Where(a => a.CurrentHp > 0))
+            {
+                var granted = GrantShield(ally, BarrierStoneShieldAmount);
+                TriggerInspire(ally, granted, playerTeam);
+            }
         }
 
         // Elite/Boss Enrage — universal safety net against stalemates.
@@ -630,7 +664,24 @@ public class CombatEngine
 
         var final = remaining > 0 ? Math.Max(remaining - effectiveDefense, 1) : 0;
         var wasAlive = target.CurrentHp > 0;
-        target.CurrentHp = Math.Max(0, target.CurrentHp - final);
+
+        // Twin Flame: once per combat, a hit that would drop a player Anima to 0 HP or below
+        // instead leaves them at exactly 1 -- checked here, the single choke point every
+        // HP-reducing hit (direct attacks AND reactive Retaliate/Thorns counters) already passes
+        // through. Scoped to the player's own team only (Artifacts are player-owned gear) and to
+        // "hits" specifically -- Bleed's DOT tick applies HP loss directly in
+        // TickStatusDurations, bypassing this the same way it already bypasses Defense/Shield by
+        // design, so it's deliberately NOT covered here.
+        if (wasAlive && final >= target.CurrentHp && target is Anima && !_state.TwinFlameUsed && HasArtifact("Twin Flame"))
+        {
+            _state.TwinFlameUsed = true;
+            target.CurrentHp = 1;
+            Log($"  {target.DisplayName}'s Twin Flame artifact triggers! Left at 1 HP instead of being defeated.");
+        }
+        else
+        {
+            target.CurrentHp = Math.Max(0, target.CurrentHp - final);
+        }
 
         Log($"  Target: {target.DisplayName}");
         var afterShield = absorbed > 0 ? $"{rawDamage} raw - {absorbed} shield = {preExposed}" : $"{rawDamage} raw";
@@ -656,10 +707,6 @@ public class CombatEngine
         return final;
     }
 
-    // Boss Phase transition (e.g. Warden of the Hollow, below 50% HP): fires once, the instant
-    // CurrentHp crosses the configured threshold while still alive -- same "check at the exact
-    // checkpoint it happens" pattern as Retribution above, not a Round Start poll (see Enrage),
-    // since a Phase change should react the moment it happens rather than up to a Round late.
     private void CheckPhaseTwoTransition(Enemy enemy)
     {
         if (enemy.PhaseTwoTriggered) return;

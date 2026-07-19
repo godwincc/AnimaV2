@@ -40,15 +40,21 @@ public static class RewardService
             "Ember only comes in the 4 base colors -- Vulcan/Mirage are hybrid-only outcomes, never a directly rollable base color."),
     };
 
-    public static void GrantCombatWin(PersistentLedger ledger, Random rng)
+    // Wisp Charm's flat multiplier -- applied to every Wisp grant below whenever it's owned.
+    private const double WispCharmMultiplier = 1.2;
+
+    // runLedger is optional so every pre-existing call site (none of which know about Artifacts)
+    // still compiles unchanged and behaves exactly as before -- omitting it just means no
+    // Artifact-driven bonus applies.
+    public static void GrantCombatWin(PersistentLedger ledger, Random rng, RunLedger? runLedger = null)
     {
-        ledger.Add(ResourceType.Wisp, CombatWinWisp);
+        ledger.Add(ResourceType.Wisp, ApplyWispCharm(CombatWinWisp, runLedger));
         GrantRandomColorEmber(ledger, CombatWinEmberCount, rng);
     }
 
-    public static void GrantEliteWin(PersistentLedger ledger, Random rng)
+    public static void GrantEliteWin(PersistentLedger ledger, Random rng, RunLedger? runLedger = null)
     {
-        ledger.Add(ResourceType.Wisp, EliteWinWisp);
+        ledger.Add(ResourceType.Wisp, ApplyWispCharm(EliteWinWisp, runLedger));
         GrantRandomColorEmber(ledger, EliteWinEmberCount, rng);
 
         if (rng.NextDouble() < EliteShardChance)
@@ -57,9 +63,9 @@ public static class RewardService
         }
     }
 
-    public static void GrantResourceNode(PersistentLedger ledger)
+    public static void GrantResourceNode(PersistentLedger ledger, RunLedger? runLedger = null)
     {
-        ledger.Add(ResourceType.Wisp, ResourceNodeWisp);
+        ledger.Add(ResourceType.Wisp, ApplyWispCharm(ResourceNodeWisp, runLedger));
     }
 
     // Boss grants a guaranteed shard fragment too, but only ONE of the two types (50/50, not
@@ -69,11 +75,17 @@ public static class RewardService
     // out full progress toward BOTH Shard economies at once (EchoShardCost is 5 -- a guaranteed
     // double-drop would blow past the intended multi-Delve pacing for whichever type never gets
     // spent). Flag to the user if "both" was actually intended.
-    public static void GrantBossWin(PersistentLedger ledger, Random rng)
+    public static void GrantBossWin(PersistentLedger ledger, Random rng, RunLedger? runLedger = null)
     {
-        ledger.Add(ResourceType.Wisp, BossWinWisp);
+        ledger.Add(ResourceType.Wisp, ApplyWispCharm(BossWinWisp, runLedger));
         ledger.Add(ResourceType.Vessel, 1);
         ledger.Add(RollShardType(rng), 1);
+    }
+
+    private static int ApplyWispCharm(int baseWisp, RunLedger? runLedger)
+    {
+        if (runLedger == null || !runLedger.Artifacts.Any(a => a.Name == "Wisp Charm")) return baseWisp;
+        return (int)Math.Round(baseWisp * WispCharmMultiplier);
     }
 
     private static ResourceType RollShardType(Random rng) =>
@@ -86,5 +98,37 @@ public static class RewardService
             var color = EmberColors[rng.Next(EmberColors.Length)];
             ledger.Add(EmberFor(color), 1);
         }
+    }
+
+    // Marked Coin's on-pickup bonus roll. Not specified anywhere, so weighted deliberately toward
+    // the common resources (Wisp/Ember) and away from the two Shard types -- a single (possibly
+    // early/cheap) pickup shouldn't meaningfully shortcut the Shard scarcity the rest of the
+    // reward system is built around (Elite is a 25% chance at ONE Shard; Boss guarantees exactly
+    // one). Flag to the user if a different pool/weighting was actually intended.
+    public const int MarkedCoinWispBonus = 40;
+
+    private static readonly (Action<PersistentLedger, Random> Grant, double Weight)[] MarkedCoinPool =
+    [
+        ((ledger, _) => ledger.Add(ResourceType.Wisp, MarkedCoinWispBonus), 0.50),
+        ((ledger, rng) => GrantRandomColorEmber(ledger, 1, rng), 0.35),
+        ((ledger, _) => ledger.Add(ResourceType.EchoShard, 1), 0.075),
+        ((ledger, _) => ledger.Add(ResourceType.VesselShard, 1), 0.075),
+    ];
+
+    public static void GrantMarkedCoinBonus(PersistentLedger ledger, Random rng)
+    {
+        var roll = rng.NextDouble();
+        var cumulative = 0.0;
+        foreach (var (grant, weight) in MarkedCoinPool)
+        {
+            cumulative += weight;
+            if (roll < cumulative)
+            {
+                grant(ledger, rng);
+                return;
+            }
+        }
+
+        MarkedCoinPool[^1].Grant(ledger, rng); // floating-point safety net -- unreachable in practice, weights sum to 1.0
     }
 }
