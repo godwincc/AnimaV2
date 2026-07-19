@@ -1,9 +1,9 @@
 namespace Anima.Core.Economy;
 
-// Account-level currency/fragment balances: Wisp, Echo Shards, Vessel Shards, and any future
-// crafting material -- just add a ResourceType value and it's tracked for free, no ledger code
-// changes needed. Survives between Delves (unlike RunLedger). No save/load exists yet (no
-// database per CLAUDE.md) -- callers hold one instance across Delves for now.
+// Account-level currency/fragment balances: Wisp, Echo/Vessel Shards, complete Vessels, per-color
+// Ember, and any future crafting material -- just add a ResourceType value and it's tracked for
+// free, no ledger code changes needed. Survives between Delves (unlike RunLedger). No save/load
+// exists yet (no database per CLAUDE.md) -- callers hold one instance across Delves for now.
 public sealed class PersistentLedger
 {
     private readonly Dictionary<ResourceType, int> _balances = new();

@@ -368,3 +368,106 @@ var poorReforgePass = !poorReforgeAcceptSuccess
     && poorReforgeLedger.GetBalance(ResourceType.Wisp) == ReforgeService.BaseAcceptCost - 1 // untouched
     && ReferenceEquals(poorReforgeTarget.Head, originalHeadBeforeRejectedAccept); // target untouched
 Console.WriteLine($"  [{(poorReforgePass ? "PASS" : "FAIL")}] Insufficient Wisp rejects Reforge Accept before charging or swapping anything");
+
+// ==== REWARDS — RewardService node-outcome grants ====
+// None of these Wisp amounts, the per-color Ember split, the Elite shard chance, or the Boss
+// either/or shard pick existed anywhere before RewardService -- see its doc comments for the
+// reasoning behind each number. Four checks: Combat (exact Wisp, exact total Ember count, ~25%
+// per color, no shards), Elite (exact Wisp/Ember, ~25% shard-trigger rate, never both shard types
+// at once), Resource (Wisp only), and Boss (exact Wisp, guaranteed Vessel, guaranteed exactly-one
+// shard fragment every time, ~50/50 split between the two shard types).
+
+Console.WriteLine();
+Console.WriteLine("================ Rewards: RewardService node-outcome grants ================");
+
+var rewardRng = new Random(4242);
+
+// ---- Combat win ----
+const int CombatTrials = 4000;
+var combatLedger = new PersistentLedger();
+for (var i = 0; i < CombatTrials; i++)
+{
+    RewardService.GrantCombatWin(combatLedger, rewardRng);
+}
+var combatWispPass = combatLedger.GetBalance(ResourceType.Wisp) == CombatTrials * RewardService.CombatWinWisp;
+var combatEmberTotalDraws = CombatTrials * RewardService.CombatWinEmberCount;
+var combatEmberSum = combatLedger.GetBalance(ResourceType.EmberCrimson) + combatLedger.GetBalance(ResourceType.EmberOnyx)
+    + combatLedger.GetBalance(ResourceType.EmberVerdant) + combatLedger.GetBalance(ResourceType.EmberAzure);
+var combatNoShardsPass = combatLedger.GetBalance(ResourceType.EchoShard) == 0 && combatLedger.GetBalance(ResourceType.VesselShard) == 0
+    && combatLedger.GetBalance(ResourceType.Vessel) == 0;
+
+Console.WriteLine($"  [{(combatWispPass ? "PASS" : "FAIL")}] Combat win grants exact Wisp ({CombatTrials}x{RewardService.CombatWinWisp} = {CombatTrials * RewardService.CombatWinWisp} -> {combatLedger.GetBalance(ResourceType.Wisp)})");
+Console.WriteLine($"  [{(combatEmberSum == combatEmberTotalDraws ? "PASS" : "FAIL")}] Combat win grants exactly {RewardService.CombatWinEmberCount} Ember per win ({combatEmberTotalDraws} expected total draws -> {combatEmberSum} Ember across all colors)");
+ReportBucket("EmberCrimson", combatLedger.GetBalance(ResourceType.EmberCrimson), combatEmberTotalDraws, 0.25);
+ReportBucket("EmberOnyx", combatLedger.GetBalance(ResourceType.EmberOnyx), combatEmberTotalDraws, 0.25);
+ReportBucket("EmberVerdant", combatLedger.GetBalance(ResourceType.EmberVerdant), combatEmberTotalDraws, 0.25);
+ReportBucket("EmberAzure", combatLedger.GetBalance(ResourceType.EmberAzure), combatEmberTotalDraws, 0.25);
+Console.WriteLine($"  [{(combatNoShardsPass ? "PASS" : "FAIL")}] Combat win grants no Shards/Vessel");
+
+// ---- Elite win ----
+Console.WriteLine();
+const int EliteTrials = 4000;
+var eliteLedger = new PersistentLedger();
+var eliteShardTriggerCount = 0;
+var eliteMultiShardViolation = false;
+for (var i = 0; i < EliteTrials; i++)
+{
+    var echoBefore = eliteLedger.GetBalance(ResourceType.EchoShard);
+    var vesselBefore = eliteLedger.GetBalance(ResourceType.VesselShard);
+    RewardService.GrantEliteWin(eliteLedger, rewardRng);
+    var shardDelta = (eliteLedger.GetBalance(ResourceType.EchoShard) - echoBefore) + (eliteLedger.GetBalance(ResourceType.VesselShard) - vesselBefore);
+    if (shardDelta > 1) eliteMultiShardViolation = true;
+    if (shardDelta == 1) eliteShardTriggerCount++;
+}
+var eliteWispPass = eliteLedger.GetBalance(ResourceType.Wisp) == EliteTrials * RewardService.EliteWinWisp;
+var eliteEmberTotalDraws = EliteTrials * RewardService.EliteWinEmberCount;
+var eliteEmberSum = eliteLedger.GetBalance(ResourceType.EmberCrimson) + eliteLedger.GetBalance(ResourceType.EmberOnyx)
+    + eliteLedger.GetBalance(ResourceType.EmberVerdant) + eliteLedger.GetBalance(ResourceType.EmberAzure);
+
+Console.WriteLine($"  [{(eliteWispPass ? "PASS" : "FAIL")}] Elite win grants exact Wisp ({EliteTrials}x{RewardService.EliteWinWisp} = {EliteTrials * RewardService.EliteWinWisp} -> {eliteLedger.GetBalance(ResourceType.Wisp)})");
+Console.WriteLine($"  [{(eliteEmberSum == eliteEmberTotalDraws ? "PASS" : "FAIL")}] Elite win grants exactly {RewardService.EliteWinEmberCount} Ember per win ({eliteEmberTotalDraws} expected total draws -> {eliteEmberSum} Ember across all colors)");
+Console.WriteLine($"  [{(!eliteMultiShardViolation ? "PASS" : "FAIL")}] Elite win never grants both Shard types in the same win");
+ReportBucket("Elite shard trigger", eliteShardTriggerCount, EliteTrials, RewardService.EliteShardChance);
+
+// ---- Resource node ----
+Console.WriteLine();
+var resourceLedger = new PersistentLedger();
+RewardService.GrantResourceNode(resourceLedger);
+var resourcePass = resourceLedger.GetBalance(ResourceType.Wisp) == RewardService.ResourceNodeWisp
+    && resourceLedger.GetBalance(ResourceType.EmberCrimson) == 0 && resourceLedger.GetBalance(ResourceType.EmberOnyx) == 0
+    && resourceLedger.GetBalance(ResourceType.EmberVerdant) == 0 && resourceLedger.GetBalance(ResourceType.EmberAzure) == 0
+    && resourceLedger.GetBalance(ResourceType.EchoShard) == 0 && resourceLedger.GetBalance(ResourceType.VesselShard) == 0
+    && resourceLedger.GetBalance(ResourceType.Vessel) == 0;
+Console.WriteLine($"  [{(resourcePass ? "PASS" : "FAIL")}] Resource node grants Wisp only, no Ember/Shards/Vessel ({RewardService.ResourceNodeWisp} Wisp -> {resourceLedger.GetBalance(ResourceType.Wisp)})");
+
+// ---- Boss win ----
+Console.WriteLine();
+const int BossTrials = 2000;
+var bossLedger = new PersistentLedger();
+var bossMultiShardViolation = false;
+var bossZeroShardViolation = false;
+for (var i = 0; i < BossTrials; i++)
+{
+    var echoBefore = bossLedger.GetBalance(ResourceType.EchoShard);
+    var vesselBefore = bossLedger.GetBalance(ResourceType.VesselShard);
+    RewardService.GrantBossWin(bossLedger, rewardRng);
+    var shardDelta = (bossLedger.GetBalance(ResourceType.EchoShard) - echoBefore) + (bossLedger.GetBalance(ResourceType.VesselShard) - vesselBefore);
+    if (shardDelta > 1) bossMultiShardViolation = true;
+    if (shardDelta != 1) bossZeroShardViolation = true; // guaranteed -- must be exactly 1 every time
+}
+var bossWispPass = bossLedger.GetBalance(ResourceType.Wisp) == BossTrials * RewardService.BossWinWisp;
+var bossVesselPass = bossLedger.GetBalance(ResourceType.Vessel) == BossTrials;
+var bossTotalShards = bossLedger.GetBalance(ResourceType.EchoShard) + bossLedger.GetBalance(ResourceType.VesselShard);
+
+Console.WriteLine($"  [{(bossWispPass ? "PASS" : "FAIL")}] Boss win grants exact Wisp ({BossTrials}x{RewardService.BossWinWisp} = {BossTrials * RewardService.BossWinWisp} -> {bossLedger.GetBalance(ResourceType.Wisp)})");
+Console.WriteLine($"  [{(bossVesselPass ? "PASS" : "FAIL")}] Boss win grants exactly 1 Vessel every time ({bossLedger.GetBalance(ResourceType.Vessel)}/{BossTrials})");
+Console.WriteLine($"  [{(!bossZeroShardViolation ? "PASS" : "FAIL")}] Boss win grants exactly 1 Shard fragment every time, never 0 ({bossTotalShards}/{BossTrials})");
+Console.WriteLine($"  [{(!bossMultiShardViolation ? "PASS" : "FAIL")}] Boss win never grants both Shard types at once");
+ReportBucket("Boss EchoShard-of-shards", bossLedger.GetBalance(ResourceType.EchoShard), bossTotalShards, 0.5);
+
+// ---- Reward tier ladder sanity ----
+Console.WriteLine();
+var wispOrderingPass = RewardService.ResourceNodeWisp < RewardService.CombatWinWisp
+    && RewardService.CombatWinWisp < RewardService.EliteWinWisp
+    && RewardService.EliteWinWisp < RewardService.BossWinWisp;
+Console.WriteLine($"  [{(wispOrderingPass ? "PASS" : "FAIL")}] Wisp reward tier ladder holds: Resource({RewardService.ResourceNodeWisp}) < Combat({RewardService.CombatWinWisp}) < Elite({RewardService.EliteWinWisp}) < Boss({RewardService.BossWinWisp})");
