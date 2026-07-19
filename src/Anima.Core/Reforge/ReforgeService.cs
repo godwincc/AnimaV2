@@ -1,5 +1,6 @@
 namespace Anima.Core.Reforge;
 
+using Anima.Core.Economy;
 using Anima.Core.Enums;
 using AnimaUnit = Anima.Core.Models.Anima;
 
@@ -24,13 +25,17 @@ public static class ReforgeService
         return new ReforgeOffer(candidate, chosenColor is not null);
     }
 
-    // Swaps the offer's part onto target's matching slot. Run-only mutation -- caller reverts it
-    // when the Delve ends, this never touches permanent/saved Anima data (there's nowhere to
-    // persist it to yet regardless). Any Augment on the replaced skill is lost: Augments mutate a
-    // Skill instance's fields in place elsewhere in the codebase, and that instance is simply
-    // dropped here in favor of a fresh clone of the rolled one.
-    public static void Accept(ReforgeOffer offer, AnimaUnit target)
+    // Checks affordability and deducts offer.AcceptCost Wisp from ledger BEFORE swapping anything
+    // -- returns false (and leaves target/ledger untouched) if the player can't afford it. Swaps
+    // the offer's part onto target's matching slot. Run-only mutation -- caller reverts it when
+    // the Delve ends, this never touches permanent/saved Anima data (there's nowhere to persist it
+    // to yet regardless). Any Augment on the replaced skill is lost: Augments mutate a Skill
+    // instance's fields in place elsewhere in the codebase, and that instance is simply dropped
+    // here in favor of a fresh clone of the rolled one.
+    public static bool Accept(ReforgeOffer offer, AnimaUnit target, PersistentLedger ledger)
     {
+        if (!ledger.TrySpend(ResourceType.Wisp, offer.AcceptCost)) return false;
+
         var skill = offer.Candidate.Skill.Clone();
         switch (skill.Part)
         {
@@ -46,5 +51,7 @@ public static class ReforgeService
             default:
                 throw new InvalidOperationException($"Reforge only supports Head/Frame/Tail parts, got {skill.Part}.");
         }
+
+        return true;
     }
 }

@@ -8,4 +8,6 @@ public enum WeaveRejectionReason
     DirectParentChild,
     FullSiblings,
     WeaveCountExhausted,
+    InsufficientWisp,
+    InsufficientEchoShards,
 }

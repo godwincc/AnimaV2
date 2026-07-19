@@ -1,5 +1,7 @@
 using Anima.Core.Data;
+using Anima.Core.Economy;
 using Anima.Core.Enums;
+using Anima.Core.Reforge;
 using Anima.Core.Weaving;
 using AnimaUnit = Anima.Core.Models.Anima;
 
@@ -123,6 +125,11 @@ Console.WriteLine("================ Weaving: Sibling Restriction, Weave Count, a
 
 var weaveRng = new Random(2026);
 
+// Richly-funded so none of the lineage/WeaveCount/cost/Echo checks below are incidentally blocked
+// by affordability -- the dedicated ECONOMY section further down tests affordability itself.
+var ledger = new PersistentLedger();
+ledger.Add(ResourceType.Wisp, 2_000_000);
+
 // ---- Sibling restriction: direct parent-child rejection ----
 var lineageParent = SampleAnimas.CreateEmber();
 lineageParent.Id = "LineageParent";
@@ -135,7 +142,7 @@ var parentChildResult = WeavingService.AttemptWeave(
     lineageParent, lineageChild,
     GenomeFactory.CreateFounderGenome(SampleAnimas.CreateEmber()),
     GenomeFactory.CreateFounderGenome(SampleAnimas.CreateReaper()),
-    weaveRng);
+    ledger, weaveRng);
 var parentChildPass = !parentChildResult.Success && parentChildResult.RejectionReason == WeaveRejectionReason.DirectParentChild;
 Console.WriteLine($"  [{(parentChildPass ? "PASS" : "FAIL")}] Direct parent-child rejected (reason: {parentChildResult.RejectionReason})");
 
@@ -153,7 +160,7 @@ var siblingResult = WeavingService.AttemptWeave(
     siblingA, siblingB,
     GenomeFactory.CreateFounderGenome(SampleAnimas.CreateSprout()),
     GenomeFactory.CreateFounderGenome(SampleAnimas.CreateShade()),
-    weaveRng);
+    ledger, weaveRng);
 var siblingPass = !siblingResult.Success && siblingResult.RejectionReason == WeaveRejectionReason.FullSiblings;
 Console.WriteLine($"  [{(siblingPass ? "PASS" : "FAIL")}] Full siblings rejected, order-independent (reason: {siblingResult.RejectionReason})");
 
@@ -168,7 +175,7 @@ var exhaustedResult = WeavingService.AttemptWeave(
     exhaustedParent, freshParent,
     GenomeFactory.CreateFounderGenome(SampleAnimas.CreateBoulder()),
     GenomeFactory.CreateFounderGenome(SampleAnimas.CreateEmber()),
-    weaveRng);
+    ledger, weaveRng);
 var exhaustedPass = !exhaustedResult.Success && exhaustedResult.RejectionReason == WeaveRejectionReason.WeaveCountExhausted;
 Console.WriteLine($"  [{(exhaustedPass ? "PASS" : "FAIL")}] WeaveCount-5 parent rejected (reason: {exhaustedResult.RejectionReason})");
 
@@ -195,7 +202,7 @@ var costResult = WeavingService.AttemptWeave(
     costParentA, costParentB,
     GenomeFactory.CreateFounderGenome(SampleAnimas.CreateEmber()),
     GenomeFactory.CreateFounderGenome(SampleAnimas.CreateReaper()),
-    weaveRng);
+    ledger, weaveRng);
 var costPass = costResult.Success && costResult.WispCost == 175 + 400
     && costParentA.WeaveCount == 3 && costParentB.WeaveCount == 5;
 Console.WriteLine($"  [{(costPass ? "PASS" : "FAIL")}] Weave at counts (2,4) costs 175+400=575 Wisp; both parents' WeaveCount incremented (A={costParentA.WeaveCount}, B={costParentB.WeaveCount})");
@@ -220,7 +227,7 @@ for (var i = 0; i < EchoTrials; i++)
 {
     echoParentA.WeaveCount = 0;
     echoParentB.WeaveCount = 0;
-    var result = WeavingService.AttemptWeave(echoParentA, echoParentB, echoGenomeA, echoGenomeB, weaveRng);
+    var result = WeavingService.AttemptWeave(echoParentA, echoParentB, echoGenomeA, echoGenomeB, ledger, weaveRng);
     if (result.Primary!.HybridTriggered) anyHybridTriggeredForEchoPair = true;
     if (result.EchoTriggered) spontaneousEchoCount++;
 }
@@ -234,7 +241,7 @@ for (var i = 0; i < ForceEchoTrials; i++)
 {
     echoParentA.WeaveCount = 0;
     echoParentB.WeaveCount = 0;
-    var result = WeavingService.AttemptWeave(echoParentA, echoParentB, echoGenomeA, echoGenomeB, weaveRng, forceEcho: true);
+    var result = WeavingService.AttemptWeave(echoParentA, echoParentB, echoGenomeA, echoGenomeB, ledger, weaveRng, forceEcho: true);
     if (result.EchoTriggered && result.Twin is not null) forceEchoSuccessCount++;
 }
 var forceEchoPass = forceEchoSuccessCount == ForceEchoTrials;
@@ -253,7 +260,7 @@ for (var i = 0; i < TwinDifferenceTrials; i++)
 {
     echoParentA.WeaveCount = 0;
     echoParentB.WeaveCount = 0;
-    var result = WeavingService.AttemptWeave(echoParentA, echoParentB, echoGenomeA, echoGenomeB, weaveRng, forceEcho: true);
+    var result = WeavingService.AttemptWeave(echoParentA, echoParentB, echoGenomeA, echoGenomeB, ledger, weaveRng, forceEcho: true);
     if (GenomeSignature(result.Primary!) != GenomeSignature(result.Twin!))
     {
         sawTwinDifference = true;
@@ -261,3 +268,103 @@ for (var i = 0; i < TwinDifferenceTrials; i++)
     }
 }
 Console.WriteLine($"  [{(sawTwinDifference ? "PASS" : "FAIL")}] Two Echo twins from the same parents can come out different (observed within {TwinDifferenceTrials} trials)");
+
+// ==== ECONOMY — PersistentLedger wired into Weaving and Reforge ====
+// Five checks: successful Weave deducts exactly its Wisp cost, an underfunded Weave is rejected
+// before rolling anything (and before touching the ledger or either parent's WeaveCount), Echo
+// Shard spending works the same afford-then-commit way (success spends all 5, then a second
+// attempt with 0 remaining is rejected), and the same two Wisp checks (successful deduction +
+// underfunded rejection) for Reforge's Accept.
+
+Console.WriteLine();
+Console.WriteLine("================ Economy: Wisp / Echo Shard ledger wiring ================");
+
+// ---- Weave: successful attempt deducts exactly its Wisp cost ----
+var wispDeductParentA = SampleAnimas.CreateEmber();
+wispDeductParentA.Id = "WispDeductParentA";
+var wispDeductParentB = SampleAnimas.CreateReaper();
+wispDeductParentB.Id = "WispDeductParentB";
+var wispDeductGenomeA = GenomeFactory.CreateFounderGenome(SampleAnimas.CreateEmber());
+var wispDeductGenomeB = GenomeFactory.CreateFounderGenome(SampleAnimas.CreateReaper());
+
+var wispDeductLedger = new PersistentLedger();
+wispDeductLedger.Add(ResourceType.Wisp, 100); // exactly covers 50 (count 0) + 50 (count 0)
+
+var wispDeductResult = WeavingService.AttemptWeave(
+    wispDeductParentA, wispDeductParentB, wispDeductGenomeA, wispDeductGenomeB, wispDeductLedger, weaveRng);
+var wispDeductPass = wispDeductResult.Success && wispDeductResult.WispCost == 100
+    && wispDeductLedger.GetBalance(ResourceType.Wisp) == 0;
+Console.WriteLine($"  [{(wispDeductPass ? "PASS" : "FAIL")}] Successful Weave deducts its exact Wisp cost (100 -> {wispDeductLedger.GetBalance(ResourceType.Wisp)})");
+
+// ---- Weave: insufficient Wisp rejects before rolling anything ----
+var poorParentA = SampleAnimas.CreateBoulder();
+poorParentA.Id = "PoorParentA";
+var poorParentB = SampleAnimas.CreateSprout();
+poorParentB.Id = "PoorParentB";
+var poorGenomeA = GenomeFactory.CreateFounderGenome(SampleAnimas.CreateBoulder());
+var poorGenomeB = GenomeFactory.CreateFounderGenome(SampleAnimas.CreateSprout());
+
+var poorLedger = new PersistentLedger();
+poorLedger.Add(ResourceType.Wisp, 50); // needs 100 (50+50), short by 50
+
+var poorResult = WeavingService.AttemptWeave(poorParentA, poorParentB, poorGenomeA, poorGenomeB, poorLedger, weaveRng);
+var poorPass = !poorResult.Success && poorResult.RejectionReason == WeaveRejectionReason.InsufficientWisp
+    && poorLedger.GetBalance(ResourceType.Wisp) == 50 // untouched
+    && poorParentA.WeaveCount == 0 && poorParentB.WeaveCount == 0; // nothing rolled/incremented
+Console.WriteLine($"  [{(poorPass ? "PASS" : "FAIL")}] Insufficient Wisp rejects the Weave before rolling or charging anything (reason: {poorResult.RejectionReason})");
+
+// ---- Weave: spending Echo Shards works the same afford-then-commit way ----
+var shardParentA = SampleAnimas.CreateShade();
+shardParentA.Id = "ShardParentA";
+var shardParentB = SampleAnimas.CreateAnchor();
+shardParentB.Id = "ShardParentB";
+var shardGenomeA = GenomeFactory.CreateFounderGenome(SampleAnimas.CreateShade());
+var shardGenomeB = GenomeFactory.CreateFounderGenome(SampleAnimas.CreateAnchor());
+
+var shardLedger = new PersistentLedger();
+shardLedger.Add(ResourceType.Wisp, 1000); // plenty, isolates the Echo Shard check
+shardLedger.Add(ResourceType.EchoShard, WeavingService.EchoShardCost); // exactly 5
+
+var shardSpendResult = WeavingService.AttemptWeave(
+    shardParentA, shardParentB, shardGenomeA, shardGenomeB, shardLedger, weaveRng, spendEchoShards: true);
+var shardSpendPass = shardSpendResult.Success && shardSpendResult.EchoTriggered && shardSpendResult.Twin is not null
+    && shardLedger.GetBalance(ResourceType.EchoShard) == 0;
+Console.WriteLine($"  [{(shardSpendPass ? "PASS" : "FAIL")}] Spending 5 Echo Shards guarantees Echo (with a Twin) and drains the balance to 0");
+
+// Second attempt: 0 Echo Shards remain, so requesting the spend again must be rejected -- Wisp is
+// re-topped-up first so only the Echo Shard shortfall can be the cause.
+shardLedger.Add(ResourceType.Wisp, 1000);
+var shardCountBeforeSecondAttempt = shardParentA.WeaveCount;
+var shardInsufficientResult = WeavingService.AttemptWeave(
+    shardParentA, shardParentB, shardGenomeA, shardGenomeB, shardLedger, weaveRng, spendEchoShards: true);
+var shardInsufficientPass = !shardInsufficientResult.Success
+    && shardInsufficientResult.RejectionReason == WeaveRejectionReason.InsufficientEchoShards
+    && shardParentA.WeaveCount == shardCountBeforeSecondAttempt; // nothing rolled
+Console.WriteLine($"  [{(shardInsufficientPass ? "PASS" : "FAIL")}] Requesting Echo Shard spend with 0 remaining is rejected (reason: {shardInsufficientResult.RejectionReason})");
+
+// ---- Reforge: successful Accept deducts its exact Wisp cost ----
+var reforgeRng = new Random(99);
+var reforgeTarget = SampleAnimas.CreateEmber();
+var originalHead = reforgeTarget.Head;
+
+var reforgeLedger = new PersistentLedger();
+reforgeLedger.Add(ResourceType.Wisp, ReforgeService.BaseAcceptCost);
+
+var reforgeOffer = ReforgeService.RollOffer(reforgeRng);
+var reforgeAcceptSuccess = ReforgeService.Accept(reforgeOffer, reforgeTarget, reforgeLedger);
+var reforgeAcceptPass = reforgeAcceptSuccess && reforgeLedger.GetBalance(ResourceType.Wisp) == 0;
+Console.WriteLine($"  [{(reforgeAcceptPass ? "PASS" : "FAIL")}] Successful Reforge Accept deducts its exact Wisp cost ({ReforgeService.BaseAcceptCost} -> {reforgeLedger.GetBalance(ResourceType.Wisp)})");
+
+// ---- Reforge: insufficient Wisp rejects Accept before touching the target ----
+var poorReforgeTarget = SampleAnimas.CreateEmber();
+var originalHeadBeforeRejectedAccept = poorReforgeTarget.Head;
+
+var poorReforgeLedger = new PersistentLedger();
+poorReforgeLedger.Add(ResourceType.Wisp, ReforgeService.BaseAcceptCost - 1); // one short
+
+var poorReforgeOffer = ReforgeService.RollOffer(reforgeRng);
+var poorReforgeAcceptSuccess = ReforgeService.Accept(poorReforgeOffer, poorReforgeTarget, poorReforgeLedger);
+var poorReforgePass = !poorReforgeAcceptSuccess
+    && poorReforgeLedger.GetBalance(ResourceType.Wisp) == ReforgeService.BaseAcceptCost - 1 // untouched
+    && ReferenceEquals(poorReforgeTarget.Head, originalHeadBeforeRejectedAccept); // target untouched
+Console.WriteLine($"  [{(poorReforgePass ? "PASS" : "FAIL")}] Insufficient Wisp rejects Reforge Accept before charging or swapping anything");

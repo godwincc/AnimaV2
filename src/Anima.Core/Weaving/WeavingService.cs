@@ -1,3 +1,4 @@
+using Anima.Core.Economy;
 using Anima.Core.Enums;
 using Anima.Core.Models;
 using AnimaUnit = Anima.Core.Models.Anima;
@@ -18,6 +19,7 @@ public static class WeavingService
     // whose WeaveCount has reached this array's length has exhausted its 5 uses.
     private static readonly int[] WeaveCostCurve = [50, 100, 175, 275, 400];
     public const int MaxWeaveCount = 5;
+    public const int EchoShardCost = 5;
 
     // The two locked hybrid pairings, both directions (parent order doesn't matter).
     private static readonly Dictionary<(AnimaColor, AnimaColor), AnimaColor> HybridPairings = new()
@@ -62,18 +64,26 @@ public static class WeavingService
         return new WeavingResult(genome, ColorStats[color], hybridColor is not null, [head, frame, tail, crest]);
     }
 
-    // Full attempt orchestration: eligibility (lineage + WeaveCount) checked and, if failed,
-    // rejected before anything is rolled or charged. On success, runs one normal Weave, then --
-    // unless forceEcho already committed to it -- rolls the 5% spontaneous Echo chance, but only
-    // if that first Weave did NOT already hybrid-trigger (a separate roll from the 33% hybrid
-    // check, gated behind it so a single attempt can't land both a hybrid AND a twin). If Echo
-    // triggers (spontaneous or forced), a second, fully independent Weave is rolled for the twin
-    // -- genuinely independent, not a copy of the first. Both parents' WeaveCount is incremented
-    // by exactly 1 on success, regardless of whether Echo produced a twin.
+    // Full attempt orchestration: eligibility (lineage + WeaveCount), then affordability (Wisp,
+    // and Echo Shards if spendEchoShards was requested) are ALL checked -- and, if any fails,
+    // rejected -- before anything is rolled or a single resource is deducted. Only once every
+    // check has passed does this commit: Wisp (and Echo Shards, if requested) are spent from
+    // ledger, then one normal Weave runs. Unless forceEcho or spendEchoShards already committed to
+    // it, the 5% spontaneous Echo chance is then rolled, but only if that first Weave did NOT
+    // already hybrid-trigger (a separate roll from the 33% hybrid check, gated behind it so a
+    // single attempt can't land both a hybrid AND a twin off the same roll). If Echo triggers
+    // (spontaneous or forced/purchased), a second, fully independent Weave is rolled for the twin
+    // -- genuinely independent, not a copy of the first, and free to hybrid-trigger on its own.
+    // Both parents' WeaveCount is incremented by exactly 1 on success, regardless of Echo.
+    //
+    // forceEcho is a direct test hook that bypasses the economy entirely (kept for testing, not
+    // tied to any real resource). spendEchoShards is the real "player chose to spend fragments"
+    // path: it requires and consumes EchoShardCost (5) Echo Shards from ledger.
     public static WeaveAttemptResult AttemptWeave(
         AnimaUnit parentA, AnimaUnit parentB,
         AnimaGenome genomeA, AnimaGenome genomeB,
-        Random rng, bool forceEcho = false)
+        PersistentLedger ledger,
+        Random rng, bool forceEcho = false, bool spendEchoShards = false)
     {
         if (IsDirectParentChild(parentA, parentB))
             return WeaveAttemptResult.Rejected(WeaveRejectionReason.DirectParentChild);
@@ -85,11 +95,21 @@ public static class WeavingService
             return WeaveAttemptResult.Rejected(WeaveRejectionReason.WeaveCountExhausted);
 
         var wispCost = GetWeaveCost(parentA.WeaveCount) + GetWeaveCost(parentB.WeaveCount);
+        if (!ledger.CanAfford(ResourceType.Wisp, wispCost))
+            return WeaveAttemptResult.Rejected(WeaveRejectionReason.InsufficientWisp);
+
+        if (spendEchoShards && !ledger.CanAfford(ResourceType.EchoShard, EchoShardCost))
+            return WeaveAttemptResult.Rejected(WeaveRejectionReason.InsufficientEchoShards);
+
+        // Every check passed -- commit. Nothing above this point mutated the ledger or rolled.
+        ledger.TrySpend(ResourceType.Wisp, wispCost);
+        if (spendEchoShards) ledger.TrySpend(ResourceType.EchoShard, EchoShardCost);
 
         var primary = Weave(genomeA, genomeB, rng);
 
         WeavingResult? twin = null;
-        var echoTriggered = forceEcho || (!primary.HybridTriggered && rng.NextDouble() < EchoTriggerChance);
+        var echoTriggered = forceEcho || spendEchoShards
+            || (!primary.HybridTriggered && rng.NextDouble() < EchoTriggerChance);
         if (echoTriggered)
         {
             twin = Weave(genomeA, genomeB, rng);
@@ -119,8 +139,8 @@ public static class WeavingService
     }
 
     // Wisp cost of a single parent's Weave use at its current WeaveCount (0-indexed: 0 -> 1st
-    // use). Caller is responsible for actually charging/deducting Wisp -- no run-economy/Wisp-
-    // ledger type exists yet, same scope note as ReforgeService's Wisp-cost handling.
+    // use). Pure cost lookup (e.g. for a UI cost preview) -- AttemptWeave is what actually checks
+    // affordability and deducts from a PersistentLedger.
     public static int GetWeaveCost(int currentWeaveCount)
     {
         if (currentWeaveCount < 0 || currentWeaveCount >= WeaveCostCurve.Length)
