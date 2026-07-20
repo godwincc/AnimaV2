@@ -26,10 +26,32 @@ public class Anima : ICombatant
     public required Skill Tail { get; set; }
     public required Skill Crest { get; set; } // always active, not in the deck
 
+    // Hidden R1/R2 genes per part -- the two non-manifesting genes AnimaMaterializationService.
+    // Build now carries through from the resolved genome (BUGFIX, see its own comment: these used
+    // to be silently discarded on materialization). Nullable, NOT required: the starter trio
+    // (SampleAnimas' 3 hardcoded founders) never went through Build and has no recorded hidden
+    // genes at all -- GenomeFactory.CreateFounderGenome's synthesized placeholder is what covers
+    // that one remaining case. Null here is the signal GenomeFactory.CreateGenome uses to tell a
+    // "real recorded genome" Anima (Weave/Boss-hatch) apart from a founder.
+    public Skill? HeadR1 { get; set; }
+    public Skill? HeadR2 { get; set; }
+    public Skill? FrameR1 { get; set; }
+    public Skill? FrameR2 { get; set; }
+    public Skill? TailR1 { get; set; }
+    public Skill? TailR2 { get; set; }
+    public Skill? CrestR1 { get; set; }
+    public Skill? CrestR2 { get; set; }
+
     // Weaving (breeding) lineage state: null for founders/un-bred starting Animas.
     public string? ParentAId { get; set; }
     public string? ParentBId { get; set; }
     public int WeaveCount { get; set; } = 0;
+
+    // Set on both sides of an Echo-triggered Weave (see AnimaMaterializationService's Weave
+    // overload and GameHub.ConfirmWeave) -- the real link a plain ParentAId/ParentBId match can't
+    // provide, since an Echo Twin is bred from the exact same parent pair as its Primary and would
+    // otherwise be indistinguishable from an ordinary full sibling. Null for everything else.
+    public string? EchoTwinId { get; set; }
 
     // Combat runtime state:
     public int CurrentHp { get; set; }

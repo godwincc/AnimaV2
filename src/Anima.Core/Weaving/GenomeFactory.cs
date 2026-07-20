@@ -14,6 +14,38 @@ namespace Anima.Core.Weaving;
 // real founder-genome data exists elsewhere and should replace this.
 public static class GenomeFactory
 {
+    // Single entry point for "give me this roster Anima's AnimaGenome so it can be a Weave
+    // parent." Anima.HeadR1 being null is the reliable signal for "founder with no recorded
+    // genome" (see Models.Anima's own comment) -- every Weave-produced or Boss-hatch Anima has
+    // real HeadR1/HeadR2/etc. from AnimaMaterializationService.Build, and the starter trio (the
+    // only Anima with none) is exactly what CreateFounderGenome's placeholder exists to cover.
+    public static AnimaGenome CreateGenome(AnimaUnit anima) =>
+        anima.HeadR1 is not null ? ExtractGenome(anima) : CreateFounderGenome(anima);
+
+    // Rebuilds a real AnimaGenome from a materialized Anima's own stored Dominant/R1/R2 fields --
+    // the reverse of AnimaMaterializationService.Build. Throws if any R1/R2 field is missing,
+    // since a partially-populated genome would silently corrupt WeavingService's 6-gene weighted
+    // pool rather than fail loudly; CreateGenome is what callers should actually use, since it
+    // routes founders around this method entirely.
+    public static AnimaGenome ExtractGenome(AnimaUnit anima)
+    {
+        if (anima.HeadR1 is null || anima.HeadR2 is null || anima.FrameR1 is null || anima.FrameR2 is null ||
+            anima.TailR1 is null || anima.TailR2 is null || anima.CrestR1 is null || anima.CrestR2 is null)
+        {
+            throw new InvalidOperationException(
+                $"Anima {anima.Id} has no complete recorded R1/R2 genome -- use CreateGenome (which falls back to CreateFounderGenome for founders) instead of calling this directly.");
+        }
+
+        return new AnimaGenome
+        {
+            Color = anima.Color,
+            Head = new PartGenome(anima.Head, anima.HeadR1, anima.HeadR2),
+            Frame = new PartGenome(anima.Frame, anima.FrameR1, anima.FrameR2),
+            Tail = new PartGenome(anima.Tail, anima.TailR1, anima.TailR2),
+            Crest = new PartGenome(anima.Crest, anima.CrestR1, anima.CrestR2),
+        };
+    }
+
     public static AnimaGenome CreateFounderGenome(AnimaUnit anima)
     {
         var sameColorSiblings = PrimitiveRoster.All

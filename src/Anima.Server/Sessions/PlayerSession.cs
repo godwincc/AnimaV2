@@ -30,6 +30,12 @@ public sealed class PlayerSession
     // TeamAnimaIdsJson at session creation and kept in sync with the DB by GameHub.SetTeam.
     public List<string> TeamAnimaIds { get; set; } = new();
 
+    // Deliberately in-memory only, tied to this session/connection -- same "no resume" caveat as
+    // ActiveDelveRun above. A pending Weave that's dropped by a disconnect before it's confirmed
+    // loses its naming opportunity, but NOT its already-spent Wisp/WeaveCount charge (that already
+    // wrote through to the DB in AttemptWeave) -- see PendingWeave's own comment.
+    public PendingWeave? PendingWeave { get; set; }
+
     // Deliberately in-memory only, tied to this session/connection -- explicit scope decision (see
     // CLAUDE.md's new-scope note: "no resume, no save/load of in-progress run state"). Discarded
     // (never persisted) the moment the connection drops, per PlayerSessionRegistry.OnDisconnected.

@@ -39,6 +39,15 @@ public static class AnimaMaterializationService
         return anima;
     }
 
+    // BUGFIX (found during the Phase 1 server-porting audit, predates this session): this used to
+    // only carry each part's Dominant through, silently dropping R1/R2 the instant a Vessel
+    // materialized. That's not just a display gap -- a materialized Anima that later becomes a
+    // parent needs its OWN R1/R2 for the 6-gene weighted pool (WeavingService.ResolvePart) to work
+    // at all, so every 2nd-generation Weave was silently drawing from a broken (Dominant-only)
+    // pool until this fix. Now carries all three genes per part through, exactly as resolved by
+    // WeavingService.Weave/BossHatchService.Roll -- see GenomeFactory.ExtractGenome for the
+    // reverse direction (rebuilding an AnimaGenome from these fields for this Anima's own future
+    // Weaves as a parent).
     private static AnimaUnit Build(AnimaGenome genome, Stats stats, string name, int gen, string? parentAId, string? parentBId) => new()
     {
         Id = Guid.NewGuid().ToString(),
@@ -47,9 +56,17 @@ public static class AnimaMaterializationService
         Color = genome.Color,
         BaseStats = stats,
         Head = genome.Head.Dominant.Clone(),
+        HeadR1 = genome.Head.R1.Clone(),
+        HeadR2 = genome.Head.R2.Clone(),
         Frame = genome.Frame.Dominant.Clone(),
+        FrameR1 = genome.Frame.R1.Clone(),
+        FrameR2 = genome.Frame.R2.Clone(),
         Tail = genome.Tail.Dominant.Clone(),
+        TailR1 = genome.Tail.R1.Clone(),
+        TailR2 = genome.Tail.R2.Clone(),
         Crest = genome.Crest.Dominant.Clone(),
+        CrestR1 = genome.Crest.R1.Clone(),
+        CrestR2 = genome.Crest.R2.Clone(),
         ParentAId = parentAId,
         ParentBId = parentBId,
         CurrentHp = stats.MaxHp,
