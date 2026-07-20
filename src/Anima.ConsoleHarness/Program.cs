@@ -613,16 +613,16 @@ var bellPass = bellState.SharedEnergy == 4;
 Console.WriteLine($"  [{(baselineEnergyPass ? "PASS" : "FAIL")}] Baseline starting Energy (no Artifact) is 3 (observed {noBellState.SharedEnergy})");
 Console.WriteLine($"  [{(bellPass ? "PASS" : "FAIL")}] Vanguard's Bell grants +1 starting Energy (observed {bellState.SharedEnergy})");
 
-// ---- Weaver's Thread: +1 opening hand card, 7 -> 8 ----
+// ---- Weaver's Thread: +1 hand size, 5 -> 6 (opening hand AND every Round's top-up target) ----
 var noThreadState = new CombatState { PlayerTeam = [SampleAnimas.CreateEmber()], EnemyTeam = [MakeDummyEnemy()] };
 new CombatEngine(noThreadState).StartCombat();
-var baselineHandPass = noThreadState.Hand.Count == 7;
+var baselineHandPass = noThreadState.Hand.Count == 5;
 
 var threadState = new CombatState { PlayerTeam = [SampleAnimas.CreateEmber()], EnemyTeam = [MakeDummyEnemy()] };
 new CombatEngine(threadState, [SampleArtifacts.CreateWeaversThread()]).StartCombat();
-var threadPass = threadState.Hand.Count == 8;
-Console.WriteLine($"  [{(baselineHandPass ? "PASS" : "FAIL")}] Baseline opening hand (no Artifact) is 7 cards (observed {noThreadState.Hand.Count})");
-Console.WriteLine($"  [{(threadPass ? "PASS" : "FAIL")}] Weaver's Thread grants an 8-card opening hand (observed {threadState.Hand.Count})");
+var threadPass = threadState.Hand.Count == 6;
+Console.WriteLine($"  [{(baselineHandPass ? "PASS" : "FAIL")}] Baseline opening hand (no Artifact) is 5 cards (observed {noThreadState.Hand.Count})");
+Console.WriteLine($"  [{(threadPass ? "PASS" : "FAIL")}] Weaver's Thread grants a 6-card opening hand (observed {threadState.Hand.Count})");
 
 // ---- Wisp Charm: +20% Wisp on every reward type ----
 Console.WriteLine();
@@ -691,7 +691,7 @@ ReportBucket("Marked Coin -> Ember", markedCoinEmberCount, MarkedCoinTrials, 0.3
 ReportBucket("Marked Coin -> EchoShard", markedCoinEchoCount, MarkedCoinTrials, 0.075);
 ReportBucket("Marked Coin -> VesselShard", markedCoinVesselCount, MarkedCoinTrials, 0.075);
 
-// ==== ARTIFACTS (PART 2) — the final 4, completing the full 10-Artifact set ====
+// ==== ARTIFACTS (PART 2) — 4 more Delve-scoped Artifacts (see SampleArtifacts.AllFactories for the current full roster/count) ====
 Console.WriteLine();
 Console.WriteLine("================ Artifacts: final 4 (Withering Fang, Focusing Lens, Silent Chime, Ember Core) ================");
 
@@ -893,6 +893,101 @@ buyPoorLedger.Add(ResourceType.Wisp, EmberService.ShopPrice - 1);
 var buyPoorSuccess = EmberService.TryBuyEmber(buyPoorLedger);
 var buyPoorPass = !buyPoorSuccess && buyPoorLedger.GetBalance(ResourceType.Wisp) == EmberService.ShopPrice - 1;
 Console.WriteLine($"  [{(buyPoorPass ? "PASS" : "FAIL")}] Insufficient Wisp rejects buying Ember from Wares, nothing charged");
+
+// ==== HAND/DECK REWORK — persistent hand + top-up draw (replaces the earlier flat "+3/Round" ====
+// ==== draw), plus Sifting Stone, the 12th Artifact ====
+// HandMax is now 5 (6 with Weaver's Thread) -- both the opening hand AND every Round Start's
+// top-up target, via the same TopUpHand helper. Four things verified: unplayed cards persist
+// across a Round with nothing forced back to the discard pile; the top-up draw count is exactly
+// hand-max-minus-current (not a flat number); the discard-pile-reshuffles-into-draw-pile behavior
+// (which already existed in DrawCards before this task -- confirmed, not newly added) still fires
+// correctly feeding the new top-up model; and Sifting Stone's own pre-top-up voluntary discard.
+
+Console.WriteLine();
+Console.WriteLine("================ Hand/Deck rework: persistent hand + top-up draw, Sifting Stone ================");
+
+// ---- Persistent hand: nothing played -> nothing discarded, nothing (re)drawn -- already at HandMax ----
+var persistentHandState = new CombatState { PlayerTeam = [SampleAnimas.CreateBoulder()], EnemyTeam = [MakeDummyEnemy()] };
+var persistentHandEngine = new CombatEngine(persistentHandState);
+persistentHandEngine.ChoosePlayerSkill = (_, _) => null; // nobody plays -- isolates hand persistence from skill resolution
+persistentHandEngine.StartCombat();
+var openingHand = new List<Skill>(persistentHandState.Hand);
+persistentHandEngine.RunRound();
+var handUnchangedPass = persistentHandState.Hand.Count == openingHand.Count && persistentHandState.Hand.SequenceEqual(openingHand);
+Console.WriteLine($"  [{(handUnchangedPass ? "PASS" : "FAIL")}] Persistent hand: unplayed cards remain in hand at Round end, no forced full-hand discard/redraw (Round 1's {openingHand.Count}-card hand is unchanged going into Round 2)");
+
+// ---- Top-up draw count is hand-max-minus-current, not a flat per-Round number ----
+var topUpState = new CombatState { PlayerTeam = [SampleAnimas.CreateBoulder()], EnemyTeam = [MakeDummyEnemy()] };
+var topUpEngine = new CombatEngine(topUpState);
+topUpEngine.ChoosePlayerSkill = (_, _) => null;
+topUpEngine.StartCombat(); // hand = 5
+
+// Simulate "2 cards were played this Round" by moving them straight to the discard pile --
+// isolates TopUpHand's own draw-count math from the rest of ActionPhase/skill resolution.
+for (var i = 0; i < 2; i++)
+{
+    var card = topUpState.Hand[0];
+    topUpState.Hand.RemoveAt(0);
+    topUpState.DiscardPile.Add(card);
+}
+var handBeforeTopUp = topUpState.Hand.Count; // 3
+topUpEngine.RunRound(); // Round Start's top-up should draw exactly 5 - 3 = 2, no more no less
+var topUpCountPass = topUpState.Hand.Count == 5;
+Console.WriteLine($"  [{(topUpCountPass ? "PASS" : "FAIL")}] Top-up draw pulls exactly hand-max-minus-current cards ({handBeforeTopUp} -> {topUpState.Hand.Count}, expected 5), not a flat per-Round count");
+
+// ---- Reshuffle-on-empty (pre-existing in DrawCards) still correctly feeds the top-up model ----
+var reshuffleState = new CombatState { PlayerTeam = [SampleAnimas.CreateBoulder()], EnemyTeam = [MakeDummyEnemy()] };
+var reshuffleLog = new List<string>();
+var reshuffleEngine = new CombatEngine(reshuffleState);
+reshuffleEngine.ChoosePlayerSkill = (_, _) => null;
+reshuffleEngine.OnLog = line => reshuffleLog.Add(line);
+reshuffleEngine.StartCombat(); // 1 Anima -> 9-card deck; hand=5, drawPile=4, discard=0
+
+// Force the draw pile empty and stash everything else in the discard pile, then vacate 2 hand
+// slots too -- isolates DrawCards' existing "discard pile shuffled back into the draw pile"
+// recycle path (unchanged by this task) from the rest of RoundStartPhase.
+reshuffleState.DiscardPile.AddRange(reshuffleState.DrawPile);
+reshuffleState.DrawPile.Clear();
+for (var i = 0; i < 2; i++)
+{
+    var card = reshuffleState.Hand[0];
+    reshuffleState.Hand.RemoveAt(0);
+    reshuffleState.DiscardPile.Add(card);
+}
+var reshuffleDiscardBefore = reshuffleState.DiscardPile.Count; // 4 + 2 = 6
+reshuffleEngine.RunRound();
+var reshuffleLoggedPass = reshuffleLog.Any(l => l.Contains("Discard pile shuffled back into the draw pile"));
+var reshuffleHandPass = reshuffleState.Hand.Count == 5;
+Console.WriteLine($"  [{(reshuffleLoggedPass && reshuffleHandPass ? "PASS" : "FAIL")}] Reshuffle-on-empty already existed in DrawCards and still fires correctly under the new top-up model (draw pile was empty, {reshuffleDiscardBefore}-card discard pile reshuffled back in, hand -> {reshuffleState.Hand.Count})");
+
+// ---- Sifting Stone: voluntary pre-top-up discard, then the top-up replaces played AND discarded cards ----
+var siftState = new CombatState { PlayerTeam = [SampleAnimas.CreateBoulder()], EnemyTeam = [MakeDummyEnemy()] };
+var siftEngine = new CombatEngine(siftState, [SampleArtifacts.CreateSiftingStone()]);
+siftEngine.ChoosePlayerSkill = (_, _) => null;
+siftEngine.StartCombat(); // hand = 5
+siftEngine.ChooseSiftingStoneDiscards = state => state.Hand.Take(3).ToList(); // discard 3 of the 5
+siftEngine.RunRound();
+var siftHandBackToMaxPass = siftState.Hand.Count == 5;
+var siftDiscardPileHasThreePass = siftState.DiscardPile.Count == 3;
+Console.WriteLine($"  [{(siftHandBackToMaxPass && siftDiscardPileHasThreePass ? "PASS" : "FAIL")}] Sifting Stone: discarding 3 of 5 hand cards before the top-up draw empties them into the discard pile AND the top-up refills the hand back to 5 (hand -> {siftState.Hand.Count}, discard pile -> {siftState.DiscardPile.Count})");
+
+var noSiftState = new CombatState { PlayerTeam = [SampleAnimas.CreateBoulder()], EnemyTeam = [MakeDummyEnemy()] };
+var noSiftEngine = new CombatEngine(noSiftState); // Sifting Stone NOT owned
+noSiftEngine.ChoosePlayerSkill = (_, _) => null;
+noSiftEngine.ChooseSiftingStoneDiscards = state => state.Hand.Take(3).ToList(); // set anyway -- must be ignored, Artifact not owned
+noSiftEngine.StartCombat();
+noSiftEngine.RunRound();
+var noSiftIgnoredPass = noSiftState.Hand.Count == 5 && noSiftState.DiscardPile.Count == 0;
+Console.WriteLine($"  [{(noSiftIgnoredPass ? "PASS" : "FAIL")}] Without Sifting Stone owned, ChooseSiftingStoneDiscards is never consulted even if set (hand/discard pile untouched)");
+
+var siftNoCallbackState = new CombatState { PlayerTeam = [SampleAnimas.CreateBoulder()], EnemyTeam = [MakeDummyEnemy()] };
+var siftNoCallbackEngine = new CombatEngine(siftNoCallbackState, [SampleArtifacts.CreateSiftingStone()]);
+siftNoCallbackEngine.ChoosePlayerSkill = (_, _) => null;
+// ChooseSiftingStoneDiscards deliberately left unset -- should default to "discard nothing".
+siftNoCallbackEngine.StartCombat();
+siftNoCallbackEngine.RunRound();
+var siftDefaultPass = siftNoCallbackState.Hand.Count == 5 && siftNoCallbackState.DiscardPile.Count == 0;
+Console.WriteLine($"  [{(siftDefaultPass ? "PASS" : "FAIL")}] Sifting Stone owned but ChooseSiftingStoneDiscards left unset defaults to discarding nothing (safe no-op)");
 
 // ==== AUGMENTS — the real AugmentService, replacing the Delve simulation's earlier [SIM AUGMENT] stub ====
 // The 4 locked types (Increase Effect, AoE Damage, Decrease Cost, Extend), the 3-per-part cap, and
@@ -1337,7 +1432,7 @@ var delveRunLedger = new RunLedger();
 var delveSimRng = new Random(DelveSeed * 31 + 1);
 var delveRewardRng = new Random(DelveSeed * 31 + 2);
 
-// Cycles deterministically through the full 11-Artifact roster (SampleArtifacts.AllFactories) --
+// Cycles deterministically through the full Artifact roster (SampleArtifacts.AllFactories) --
 // not a drop-rate simulation. With the 3-Artifact cap (ArtifactService.MaxArtifactsPerDelve) now
 // in effect, most Delves only ever actually collect the first 3 of these; later Treasure hits are
 // expected to be skipped/lost once at cap (see the Treasure case below).
@@ -1384,6 +1479,13 @@ const int DelveRoundCap = 40;
     var engine = new CombatEngine(state, ownedArtifacts);
     engine.ChoosePlayerSkill = ChooseDelveSkill;
     engine.OnLog = line => fightLog.Add(line);
+
+    // Sifting Stone: the engine only ever consults this if the Artifact is actually owned (see
+    // CombatEngine.RoundStartPhase), so it's safe to always set -- simple placeholder policy, not
+    // real player judgment: discard anything that costs more Energy than the team currently has,
+    // since it can't be played this Round anyway.
+    engine.ChooseSiftingStoneDiscards = s => s.Hand.Where(skill => skill.EnergyCost > s.SharedEnergy).ToList();
+
     engine.StartCombat();
 
     if (runLedgerForChime.Artifacts.Any(a => a.Name == "Silent Chime"))

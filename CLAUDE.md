@@ -42,12 +42,12 @@ Sibling restriction (copies Axie): only parent-offspring + full-sibling blocked.
 **Naming:** players name their own Animas — mandatory prompt on Weave creation. Starter trio (Ember/Boulder/Sprout) keeps hardcoded names, no prompt.
 
 ## Resource Economy (LOCKED, VERIFIED)
-Persistent: Wisp, Echo Shards, Vessel Shards. Run-only: all 11 Artifacts. **HP persistence across nodes = attrition** (confirmed). Reward flow: Resource=30Wisp+15%chance1Ember, Combat=50Wisp+1guaranteedEmber, Elite=120Wisp+1guaranteedEmber+25%chanceEach2nd/3rdEmber(max3)+25%chance1Shard, Boss=300Wisp+guaranteed1(50/50Echo/Vessel), noEmber.
+Persistent: Wisp, Echo Shards, Vessel Shards. Run-only: all 12 Artifacts. **HP persistence across nodes = attrition** (confirmed). Reward flow: Resource=30Wisp+15%chance1Ember, Combat=50Wisp+1guaranteedEmber, Elite=120Wisp+1guaranteedEmber+25%chanceEach2nd/3rdEmber(max3)+25%chance1Shard, Boss=300Wisp+guaranteed1(50/50Echo/Vessel), noEmber.
 
 **Ember is momentary, NOT persistent** — genuinely per-color but never banked. Each drop (Combat/Elite/Resource win, Marked Coin's roll, or a Shop Wares purchase) is resolved immediately, one at a time: **Augment now** (spend it via AugmentService on a same-color team skill) or **Convert to Wisp** (flat 15 Wisp, `EmberService.ConvertToWisp`). Shop Wares also sells 1 Ember outright for 25 Wisp (`EmberService.TryBuyEmber`, Ember Core discount applies) — bought Ember is spent immediately through the same Augment-page flow.
 
-## All 11 Artifacts (LOCKED, VERIFIED, icons finalized)
-Twin Flame, Wisp Charm (+20% Wisp), Barrier Stone (+5 Shield team/Round), Vanguard's Bell (+1 Energy Rd1), Weaver's Thread (+1 hand), Marked Coin (random resource on pickup), Withering Fang (consumed any node, executes lowest-HP to 1HP if combat), Focusing Lens (every 4th Attack = 2x dmg), Silent Chime (extra action, single-use/Delve), Ember Core (20% Shop discount), Sapling Charm (heal 10% max HP any node, no revive).
+## All 12 Artifacts (LOCKED, VERIFIED, icons finalized)
+Twin Flame, Wisp Charm (+20% Wisp), Barrier Stone (+5 Shield team/Round), Vanguard's Bell (+1 Energy Rd1), Weaver's Thread (+1 hand, 5→6), Marked Coin (random resource on pickup), Withering Fang (consumed any node, executes lowest-HP to 1HP if combat), Focusing Lens (every 4th Attack = 2x dmg), Silent Chime (extra action, single-use/Delve), Ember Core (20% Shop discount), Sapling Charm (heal 10% max HP any node, no revive), **Sifting Stone** (before each Round's top-up draw, discard any number of hand cards — the top-up replaces them along with whatever was played).
 
 **Hard cap: 3 Artifacts held per Delve, no swap mechanic** (`ArtifactService.MaxArtifactsPerDelve`). Treasure at 3/3 = reward skipped/lost entirely, no substitute (intentional punish). Shop at 3/3 = the Wares Artifact slot doesn't roll at all that visit. Boss reward is unaffected (Wisp + Shard only, never in the Artifact pool).
 
@@ -66,6 +66,11 @@ Twin Flame, Wisp Charm (+20% Wisp), Barrier Stone (+5 Shield team/Round), Vangua
 | Azure(Utility) | 70 | 10 | 13 | 1.0x | 1.0x |
 
 3v3, positions 1(front)/2(mid)/3(back). Any status affecting "target's next action" MUST use Until-Consumed, never Fixed-turn:1.
+
+## Hand/Deck (LOCKED, VERIFIED — persistent hand + top-up draw)
+Shared team deck (Head/Frame/Tail x3 copies each, Crests excluded). **Hand is persistent, never force-discarded** — unplayed cards stay in hand across Rounds. **Hand max = 5 (6 with Weaver's Thread)**; the opening hand AND every Round Start's draw both just top the hand back up to this number (draw count = hand max − cards currently held), replacing the old flat "+3 cards/Round" design. Played cards go to the discard pile; when the draw pile runs dry mid-draw, the discard pile reshuffles back into it and drawing continues (pre-existing behavior, confirmed still correct under the new model). Pairs with Energy banking (confirmed: +3/Round, capped at 9, `CombatEngine.RoundStartPhase` — locked, not a discrepancy) so a player can hold and wait on an expensive card.
+
+**Sifting Stone** (12th Artifact) taps into this: before the top-up draw resolves each Round, discard any number of hand cards — the top-up then refills to hand max, replacing both played AND voluntarily-discarded cards.
 
 ## All 4 Colors — 48 skills, 12 Archetypes (fully coded & tested)
 **CRIMSON:** Ember(Slash/Charge/Execute/Reckless), Reaper(Rend/Lunge/Frenzy/Bloodthirst), Marksman(Snipe/Retreat/Marked Shot/Steady Aim).
@@ -102,17 +107,17 @@ Grovehide/Quillfang (Basic). The Sentinel (Elite DPS-check). The Leech Mother (E
 3. **Sanctum** — grid of Anima cards (portrait, name, color, Gen, parts list, Weave Count progress bar). Active-team members get an amber border + "In team" badge. Cards link to Profile.
 4. **Anima Profile** — portrait (rename icon), color/Gen/Weave Count, parts list, "Threads" section (Dominant per part, dot-accent) with a **"Show hidden" toggle** (matches Axie's real hidden-gene-by-default precedent), a **"Lineage" section** (Parents/Siblings/Echo Twin — all clickable links to that Anima's own Profile), Delve History.
 5. **Delve screen** — map is LARGE/primary focus, horizontal (2 distinct starting nodes per the real algorithm, Boss far right). Real icons: sword=Combat, skull=Elite(bigger), coin=Resource, building-store=Shop, gift=Treasure, hammer=Reforge, crown=Boss(biggest). **Shape encodes risk: Combat/Elite/Boss = circles (sized by threat), safe types (Shop/Resource/Treasure) = diamond outlines.** Scroll+pinch-zoom. Team (parts-list) left, resources+Artifacts (show as X/3, the hard cap) grouped right below the map.
-6. **Collection** — top: persistent resource summary with counts+descriptions. Below: "Artifacts (X of 11 discovered)" vertical list — unlocked shows icon+name+description+"Delves won with: X"; locked shows a dim silhouette ("Undiscovered").
+6. **Collection** — top: persistent resource summary with counts+descriptions. Below: "Artifacts (X of 12 discovered)" vertical list — unlocked shows icon+name+description+"Delves won with: X"; locked shows a dim silhouette ("Undiscovered").
 
 ### Room-encounter screens (3 of 4 locked, differentiated backgrounds per type)
 - **Resource** (LOCKED) — golden radial bg, glowing sparkle/wisp-orb centerpiece, "A quiet cache" flavor text, +30 Wisp shown prominently, single "Collect" button.
 - **Treasure** (LOCKED) — richer purple/magenta gem-tone bg, "A forgotten chest" flavor text, reveals the actual Artifact offered in a highlighted card, single "Claim" button.
-- **Shop** (LOCKED) — warm amber bg (closest to Hub's tone), "A weathered stall" flavor text, **only 2 sections: Rest and Wares** — there is NO standalone "Augment a skill" menu; Augmenting only ever triggers from an Ember actually in hand (a node drop, or a Wares Ember purchase below), never from browsing a list. **Rest**: heal 40% max HP for Wisp. **Wares**: fresh independent stock rolled every Shop visit (no shared/depleting pool across multiple Shops in one Delve) — 3 Ember for sale (25 Wisp each, random color per slot, independent rolls, duplicates allowed) + 1 Artifact for sale (random from the 11, excluding any the player currently holds; slot doesn't appear at all if the player is at the 3-Artifact cap). Buying an Ember immediately opens the shared Augment-page flow (same screen a node-dropped Ember uses) scoped to that slot's color. "Leave" link to exit without buying.
+- **Shop** (LOCKED) — warm amber bg (closest to Hub's tone), "A weathered stall" flavor text, **only 2 sections: Rest and Wares** — there is NO standalone "Augment a skill" menu; Augmenting only ever triggers from an Ember actually in hand (a node drop, or a Wares Ember purchase below), never from browsing a list. **Rest**: heal 40% max HP for Wisp. **Wares**: fresh independent stock rolled every Shop visit (no shared/depleting pool across multiple Shops in one Delve) — 3 Ember for sale (25 Wisp each, random color per slot, independent rolls, duplicates allowed) + 1 Artifact for sale (random from the 12, excluding any the player currently holds; slot doesn't appear at all if the player is at the 3-Artifact cap). Buying an Ember immediately opens the shared Augment-page flow (same screen a node-dropped Ember uses) scoped to that slot's color. "Leave" link to exit without buying.
   - **PENDING (design not yet built): the shared Augment-page flow itself** — the picker screen a player lands on after choosing "Augment now" on any Ember (node drop or Wares purchase). Needs to show all 3 team Animas as horizontal cards, each listing all 4 skills (grouped/filtered to the Ember's own color) with current Augments + an "apply" action, reusable identically from every entry point.
 - **Combat/Elite/Boss rooms** — NOT YET DESIGNED. Planned: darker/tenser background with a subtle red undertone for Combat/Elite, darkest/most dramatic for Boss.
 
-### The 11 Artifact Icons (finalized)
-Twin Flame=flame, Wisp Charm=sparkles, Barrier Stone=shield, Vanguard's Bell=custom clean bell outline (no clapper), Weaver's Thread=custom 3 slanted diagonal lines, Marked Coin=custom coin outline + sparkle-star inside, Withering Fang=custom sharp pointed tooth shape, Focusing Lens=custom magnifying glass (no plus sign), Silent Chime=asterisk (placeholder), Ember Core=sun, Sapling Charm=leaf.
+### The 12 Artifact Icons (finalized)
+Twin Flame=flame, Wisp Charm=sparkles, Barrier Stone=shield, Vanguard's Bell=custom clean bell outline (no clapper), Weaver's Thread=custom 3 slanted diagonal lines, Marked Coin=custom coin outline + sparkle-star inside, Withering Fang=custom sharp pointed tooth shape, Focusing Lens=custom magnifying glass (no plus sign), Silent Chime=asterisk (placeholder), Ember Core=sun, Sapling Charm=leaf, **Sifting Stone=ti-recycle (stock Tabler icon, no custom shape)**.
 
 ### NOT yet designed: Combat screen (the actual 3v3 fight UI — the last major screen)
 

@@ -10,6 +10,10 @@ public class CombatEngine
     private readonly List<Artifact> _ownedArtifacts;
     private readonly Random _random = new();
 
+    // A hard backstop inside DrawCards itself, distinct from HandMax (the 5/6 target size
+    // TopUpHand actually draws to) -- normal play never gets anywhere near this under the current
+    // top-up model, it just guards DrawCards (a general-purpose primitive) against ever
+    // overfilling the hand if something else calls it directly in the future.
     private const int HandCap = 10;
     private const int CopiesPerSkill = 3;
     private const double CrestConditionalMultiplier = 1.25;
@@ -38,6 +42,13 @@ public class CombatEngine
     // Placeholder for real player input / AI; the harness supplies a hardcoded priority for now.
     public Func<Anima, CombatState, Skill?>? ChoosePlayerSkill { get; set; }
 
+    // Sifting Stone: before each Round's top-up draw resolves, lets the player discard any number
+    // of cards from their current hand (the top-up draw then replaces both played AND these
+    // voluntarily-discarded cards). Same "placeholder decision hook" pattern as ChoosePlayerSkill
+    // -- callers that don't set this (including every existing call site) simply discard nothing,
+    // a safe no-op default. Only ever consulted if Sifting Stone is owned (see RoundStartPhase).
+    public Func<CombatState, IReadOnlyList<Skill>>? ChooseSiftingStoneDiscards { get; set; }
+
     // ownedArtifacts: the Artifacts currently owned for this Delve (typically RunLedger.Artifacts)
     // -- optional so every existing call site with no Artifacts in play still compiles unchanged.
     public CombatEngine(CombatState state, IReadOnlyList<Artifact>? ownedArtifacts = null)
@@ -48,9 +59,25 @@ public class CombatEngine
 
     private bool HasArtifact(string name) => _ownedArtifacts.Any(a => a.Name == name);
 
+    // The hand's target size -- persistent hand, top-up draw model (replaces an earlier flat
+    // "draw N/Round" design): the opening hand at combat start and every Round Start's top-up
+    // draw both just fill the hand back up to this same number, via TopUpHand below. Weaver's
+    // Thread: +1 (5 -> 6).
+    private int HandMax => HasArtifact("Weaver's Thread") ? 6 : 5;
+
+    // Draws exactly enough cards to bring Hand back up to HandMax -- a no-op if already at or
+    // above it (e.g. Weaver's Thread was lost mid-combat, which can't currently happen, but this
+    // stays correct regardless). Used identically at combat start (Hand starts empty, so this
+    // naturally produces the opening hand) and at every Round Start (the actual top-up).
+    private void TopUpHand()
+    {
+        var drawCount = HandMax - _state.Hand.Count;
+        if (drawCount > 0) DrawCards(drawCount);
+    }
+
     // Builds the shared 27-card team deck (Head/Frame/Tail x3 copies each, Crests excluded),
-    // shuffles it, and draws the opening hand of 7 (8 with Weaver's Thread). Call once before
-    // the first RunRound().
+    // shuffles it, and draws the opening hand (HandMax -- 5, or 6 with Weaver's Thread). Call once
+    // before the first RunRound().
     public void StartCombat()
     {
         BuildDeck();
@@ -64,11 +91,7 @@ public class CombatEngine
             artifact.OnCombatStart?.Invoke(_state);
         }
 
-        // Weaver's Thread: +1 card in the opening hand (7 -> 8). Needs DrawCards' own draw-pile/
-        // shuffle-recycle logic, which a plain Action<CombatState> hook can't express -- checked
-        // directly here instead, same pattern as every Crest passive elsewhere in this file.
-        var openingHandSize = HasArtifact("Weaver's Thread") ? 8 : 7;
-        DrawCards(openingHandSize);
+        TopUpHand();
     }
 
     private void BuildDeck()
@@ -129,8 +152,23 @@ public class CombatEngine
         _state.SharedEnergy = Math.Min(_state.SharedEnergy + 3, 9);
         Log($"Energy: {_state.SharedEnergy}");
 
-        // Draw cards (opening hand 7 handled separately at combat start; +3/round here)
-        DrawCards(3);
+        // Sifting Stone: before the top-up draw resolves, the player may discard any number of
+        // cards from their current hand -- the top-up draw right after then replaces both played
+        // AND these voluntarily-discarded cards, same as any other top-up. ChooseSiftingStoneDiscards
+        // returning null/empty (the default -- see its own comment) means discard nothing.
+        if (HasArtifact("Sifting Stone"))
+        {
+            var toDiscard = ChooseSiftingStoneDiscards?.Invoke(_state) ?? [];
+            foreach (var skill in toDiscard.Where(s => _state.Hand.Contains(s)).ToList())
+            {
+                _state.Hand.Remove(skill);
+                _state.DiscardPile.Add(skill);
+                Log($"  Sifting Stone: discarded {skill.Name} from hand.");
+            }
+        }
+
+        // Persistent hand, top-up draw (opening hand handled identically at combat start).
+        TopUpHand();
 
         // Tick down all active Durations across all combatants
         foreach (var combatant in AllCombatants())
@@ -1366,6 +1404,11 @@ public class CombatEngine
 
     private void Log(string message) => OnLog?.Invoke(message);
 
+    // Low-level draw primitive -- TopUpHand is the only caller under the current model, computing
+    // how many to draw; this just draws that many, one at a time. Already reshuffles the discard
+    // pile back into the draw pile the moment the draw pile runs dry mid-draw (rather than ending
+    // the draw early), so a persistent hand can keep drawing indefinitely across a long combat
+    // without ever truly running out of cards.
     private void DrawCards(int count)
     {
         for (var i = 0; i < count; i++)

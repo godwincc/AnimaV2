@@ -3,24 +3,24 @@ namespace Anima.Core.Data;
 using Anima.Core.Economy;
 using Anima.Core.Models;
 
-// A first pass at the full 10-Artifact set -- all Delve-scoped (run-only, no cross-Delve
-// persistence). Each is checked purely by Name string -- either via a hook field
-// (OnCombatStart/OnPickup, for effects a plain delegate can express) or a direct name check
-// inside CombatEngine/RewardService/ArtifactService (for effects needing engine-internal state/
-// logic a delegate can't reach, e.g. DrawCards' pile-recycling, the once-per-combat Twin Flame
-// flag, or Focusing Lens's per-combat attack counter) -- same "no event bus, direct checks at
-// known checkpoints" pattern the rest of the codebase already uses for Crest passives. Not the
-// final balance pass, but the mechanics are locked.
+// The full 12-Artifact set -- all Delve-scoped (run-only, no cross-Delve persistence). Each is
+// checked purely by Name string -- either via a hook field (OnCombatStart/OnPickup, for effects a
+// plain delegate can express) or a direct name check inside CombatEngine/RewardService/
+// ArtifactService (for effects needing engine-internal state/logic a delegate can't reach, e.g.
+// DrawCards' pile-recycling, the once-per-combat Twin Flame flag, or Focusing Lens's per-combat
+// attack counter) -- same "no event bus, direct checks at known checkpoints" pattern the rest of
+// the codebase already uses for Crest passives. Not the final balance pass, but the mechanics are
+// locked.
 public static class SampleArtifacts
 {
-    // All 11 factories, one call each -- shared by anything that needs "the full Artifact roster"
+    // All 12 factories, one call each -- shared by anything that needs "the full Artifact roster"
     // (ShopService's Wares-Artifact roll, the Delve simulation's Treasure cycle), same pattern as
     // PrimitiveRoster.All for Animas. Order is arbitrary, not a drop-rate weighting.
     public static IReadOnlyList<Func<Artifact>> AllFactories { get; } =
     [
         CreateTwinFlame, CreateWispCharm, CreateBarrierStone, CreateVanguardsBell, CreateWeaversThread,
         CreateMarkedCoin, CreateWitheringFang, CreateFocusingLens, CreateSilentChime, CreateEmberCore,
-        CreateSaplingCharm,
+        CreateSaplingCharm, CreateSiftingStone,
     ];
 
     // REDEFINED from an earlier hook-validation placeholder (which only proved OnCombatStart
@@ -85,14 +85,14 @@ public static class SampleArtifacts
         };
     }
 
-    // Checked directly by name in CombatEngine.StartCombat -- needs DrawCards' own draw-pile/
+    // Checked directly by name via CombatEngine.HandMax -- needs TopUpHand's own draw-pile/
     // shuffle-recycle logic, which OnCombatStart's plain CombatState mutation can't express.
     public static Artifact CreateWeaversThread()
     {
         return new Artifact
         {
             Name = "Weaver's Thread",
-            Description = "The opening hand is dealt 1 extra card (7 becomes 8).",
+            Description = "Hand size is increased by 1 (5 becomes 6).",
         };
     }
 
@@ -154,6 +154,19 @@ public static class SampleArtifacts
         {
             Name = "Sapling Charm",
             Description = "Whenever the player enters any node, the whole team heals 10% of their max HP.",
+        };
+    }
+
+    // Checked directly by name in CombatEngine.RoundStartPhase, right before TopUpHand -- needs a
+    // player-choice hook (CombatEngine.ChooseSiftingStoneDiscards) rather than a plain hook field,
+    // since "any number of cards, player's pick" isn't expressible as a fixed delegate mutation
+    // the way e.g. Barrier Stone's flat Shield grant is.
+    public static Artifact CreateSiftingStone()
+    {
+        return new Artifact
+        {
+            Name = "Sifting Stone",
+            Description = "Before each Round's top-up draw, discard any number of cards from your hand -- the top-up draw replaces them along with whatever you played.",
         };
     }
 }
