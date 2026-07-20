@@ -28,6 +28,8 @@ builder.Services.AddSingleton<IEmailSender, LogEmailSender>();
 builder.Services.AddSingleton<AccountLockRegistry>();
 builder.Services.AddScoped<SanctumRosterRepository>();
 builder.Services.AddScoped<PersistentLedgerRepository>();
+builder.Services.AddScoped<AccountRepository>();
+builder.Services.AddScoped<AccountArtifactStatRepository>();
 builder.Services.AddSingleton<PlayerSessionRegistry>();
 
 builder.Services.AddSignalR();

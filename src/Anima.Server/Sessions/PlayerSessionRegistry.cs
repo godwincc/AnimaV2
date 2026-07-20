@@ -26,10 +26,12 @@ public sealed class PlayerSessionRegistry
         string username,
         SanctumRosterRepository rosterRepo,
         PersistentLedgerRepository ledgerRepo,
+        AccountRepository accountRepo,
         CancellationToken ct = default)
     {
         var roster = await rosterRepo.LoadAsync(accountId, ct);
         var ledger = await ledgerRepo.LoadAsync(accountId, ct);
+        var team = await accountRepo.LoadTeamAsync(accountId, ct);
 
         var session = new PlayerSession
         {
@@ -37,6 +39,7 @@ public sealed class PlayerSessionRegistry
             Username = username,
             Roster = roster,
             Ledger = ledger,
+            TeamAnimaIds = team.ToList(),
         };
 
         _sessions[connectionId] = session;

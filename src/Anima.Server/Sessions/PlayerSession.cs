@@ -26,6 +26,10 @@ public sealed class PlayerSession
     public required SanctumRoster Roster { get; init; }
     public required PersistentLedger Ledger { get; init; }
 
+    // The active-team selection (Sanctum's "In team" badge), loaded from AccountEntity.
+    // TeamAnimaIdsJson at session creation and kept in sync with the DB by GameHub.SetTeam.
+    public List<string> TeamAnimaIds { get; set; } = new();
+
     // Deliberately in-memory only, tied to this session/connection -- explicit scope decision (see
     // CLAUDE.md's new-scope note: "no resume, no save/load of in-progress run state"). Discarded
     // (never persisted) the moment the connection drops, per PlayerSessionRegistry.OnDisconnected.

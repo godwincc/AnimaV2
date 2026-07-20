@@ -9,6 +9,7 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
     public DbSet<PersistedAnimaEntity> PersistedAnimas => Set<PersistedAnimaEntity>();
     public DbSet<PersistedLedgerEntryEntity> LedgerEntries => Set<PersistedLedgerEntryEntity>();
     public DbSet<PasswordResetTokenEntity> PasswordResetTokens => Set<PasswordResetTokenEntity>();
+    public DbSet<AccountArtifactStatEntity> ArtifactStats => Set<AccountArtifactStatEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -33,6 +34,12 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
         modelBuilder.Entity<PasswordResetTokenEntity>(e =>
         {
             e.HasIndex(t => t.AccountId);
+        });
+
+        modelBuilder.Entity<AccountArtifactStatEntity>(e =>
+        {
+            e.HasIndex(s => new { s.AccountId, s.ArtifactName }).IsUnique();
+            e.Property(s => s.Version).IsConcurrencyToken();
         });
     }
 

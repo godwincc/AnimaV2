@@ -1,3 +1,5 @@
+using Anima.Core.Data;
+using Anima.Core.Enums;
 using Anima.Core.Map;
 using Anima.Core.Run;
 using Anima.Server.Auth;
@@ -14,7 +16,12 @@ namespace Anima.Server.Hubs;
 // porting the entire game surface (Weaving/Combat/Shop/Reforge/etc.) onto hub methods, which is
 // real follow-up work once this foundation is in place, not part of this pass.
 [Authorize]
-public class GameHub(PlayerSessionRegistry sessions, SanctumRosterRepository rosterRepo, PersistentLedgerRepository ledgerRepo) : Hub
+public class GameHub(
+    PlayerSessionRegistry sessions,
+    SanctumRosterRepository rosterRepo,
+    PersistentLedgerRepository ledgerRepo,
+    AccountRepository accountRepo,
+    AccountArtifactStatRepository artifactStatsRepo) : Hub
 {
     private Guid AccountId =>
         Guid.Parse(Context.User!.FindFirst(JwtTokenService.AccountIdClaimType)!.Value);
@@ -26,7 +33,7 @@ public class GameHub(PlayerSessionRegistry sessions, SanctumRosterRepository ros
 
     public override async Task OnConnectedAsync()
     {
-        await sessions.CreateAsync(Context.ConnectionId, AccountId, Username, rosterRepo, ledgerRepo);
+        await sessions.CreateAsync(Context.ConnectionId, AccountId, Username, rosterRepo, ledgerRepo, accountRepo);
         await base.OnConnectedAsync();
     }
 
@@ -41,10 +48,40 @@ public class GameHub(PlayerSessionRegistry sessions, SanctumRosterRepository ros
 
     public Task<IReadOnlyList<AnimaSummary>> GetRoster()
     {
+        var team = new HashSet<string>(Session.TeamAnimaIds);
         var summaries = Session.Roster.Animas
-            .Select(a => new AnimaSummary(a.Id, a.Name, a.Color.ToString(), a.Gen, a.WeaveCount, a.CurrentHp, a.MaxHp))
+            .Select(a => new AnimaSummary(
+                a.Id, a.Name, a.Color.ToString(), a.Gen, a.WeaveCount, a.CurrentHp, a.MaxHp,
+                team.Contains(a.Id), BuildParts(a)))
             .ToList();
         return Task.FromResult<IReadOnlyList<AnimaSummary>>(summaries);
+    }
+
+    private static IReadOnlyList<AnimaPartSummary> BuildParts(AnimaUnit a) =>
+    [
+        new AnimaPartSummary(nameof(Part.Head), a.Head.Name, a.Head.Category.ToString()),
+        new AnimaPartSummary(nameof(Part.Frame), a.Frame.Name, a.Frame.Category.ToString()),
+        new AnimaPartSummary(nameof(Part.Tail), a.Tail.Name, a.Tail.Category.ToString()),
+        new AnimaPartSummary(nameof(Part.Crest), a.Crest.Name, a.Crest.Category.ToString()),
+    ];
+
+    // Persists the Sanctum "In team" selection to AccountEntity.TeamAnimaIdsJson and updates the
+    // in-memory session copy GetRoster reads from. At most 3 (a "3-Anima team" per CLAUDE.md), no
+    // duplicates, every Id must resolve in this account's already-loaded roster -- same
+    // no-cross-account-lookup guarantee StartDelve's team lookup already relies on.
+    public async Task<IReadOnlyList<string>> SetTeam(string[] animaIds)
+    {
+        if (animaIds.Length > 3) throw new HubException("A team can have at most 3 Anima.");
+        if (animaIds.Distinct().Count() != animaIds.Length) throw new HubException("Team cannot contain duplicate Anima.");
+        foreach (var id in animaIds)
+        {
+            if (Session.Roster.FindById(id) is null)
+                throw new HubException($"Anima {id} not found in this account's roster.");
+        }
+
+        Session.TeamAnimaIds = animaIds.ToList();
+        await accountRepo.SaveTeamAsync(AccountId, Session.TeamAnimaIds);
+        return Session.TeamAnimaIds;
     }
 
     public Task<LedgerSnapshot> GetLedger()
@@ -52,6 +89,25 @@ public class GameHub(PlayerSessionRegistry sessions, SanctumRosterRepository ros
         var balances = Enum.GetValues<Core.Economy.ResourceType>()
             .ToDictionary(t => t.ToString(), t => Session.Ledger.GetBalance(t));
         return Task.FromResult(new LedgerSnapshot(balances));
+    }
+
+    // The Collection screen's Artifact list: the full 12-Artifact catalog (SampleArtifacts, the
+    // same "the full Artifact roster" source ShopService/the Delve simulation already use) joined
+    // against this account's discovered/won-with stats. See AccountArtifactStatEntity's own
+    // comment -- every account reads all-undiscovered today, since nothing yet writes to that
+    // table (Treasure/Shop pickup and Boss-victory resolution aren't ported onto GameHub yet).
+    public async Task<IReadOnlyList<ArtifactSummary>> GetArtifactCollection()
+    {
+        var stats = await artifactStatsRepo.LoadAsync(AccountId);
+
+        return SampleArtifacts.AllFactories
+            .Select(factory => factory())
+            .Select(artifact =>
+            {
+                stats.TryGetValue(artifact.Name, out var stat);
+                return new ArtifactSummary(artifact.Name, artifact.Description, stat is not null, stat?.DelvesWonWithCount ?? 0);
+            })
+            .ToList();
     }
 
     // Minimal team-selection: looks the 3 requested Animas up in this account's already-loaded
