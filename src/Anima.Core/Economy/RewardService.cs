@@ -39,6 +39,13 @@ public static class RewardService
     // actually intended.
     public const double EliteShardChance = 0.25;
 
+    // Locked by the Match Result & Retreat System design session: Elite's shard is ALWAYS a
+    // Vessel Shard specifically (never Echo) -- "keeps Vessel earned via combat performance, Echo
+    // earned via Boss/spontaneous-Weave, no overlap." This replaces the earlier 50/50 shard-type
+    // roll GrantEliteWin used before that design was locked. The follow-up "Boss Reward
+    // Restructure" session later locked Boss's own shard grant to a guaranteed Echo Shard (see
+    // GrantBossWin) -- between the two, there's no longer any 50/50 shard-type roll anywhere.
+
     private static readonly AnimaColor[] EmberColors =
         [AnimaColor.Crimson, AnimaColor.Onyx, AnimaColor.Verdant, AnimaColor.Azure];
 
@@ -72,7 +79,7 @@ public static class RewardService
 
         if (rng.NextDouble() < EliteShardChance)
         {
-            ledger.Add(RollShardType(rng), 1);
+            ledger.Add(ResourceType.VesselShard, 1);
         }
 
         return embers;
@@ -87,18 +94,23 @@ public static class RewardService
         return rng.NextDouble() < ResourceBonusEmberChance ? [RollEmberColor(rng)] : [];
     }
 
-    // Boss grants a guaranteed shard fragment too, but only ONE of the two types (50/50, not
-    // both): the design doc's own "AND/OR" phrasing left this open. Elite already offers a chance
-    // at exactly one of {EchoShard, VesselShard} -- making Boss "the same roll, but guaranteed"
-    // keeps the two node types' reward shape consistent, and avoids a single Boss clear handing
-    // out full progress toward BOTH Shard economies at once (EchoShardCost is 5 -- a guaranteed
-    // double-drop would blow past the intended multi-Delve pacing for whichever type never gets
-    // spent). Flag to the user if "both" was actually intended. No Ember involved at all.
+    // Locked by the "Boss Reward Restructure + Anima Reveal Screen" design session: Boss's guaranteed
+    // reward is Wisp + a guaranteed hatched Anima + a guaranteed Echo Shard. This retires the earlier
+    // 50/50 Echo/VesselShard roll (Vessel Shard is now Elite-only, see EliteShardChance above) and
+    // the earlier "complete Vessel" resource-counter concept entirely (ResourceType.Vessel has been
+    // removed from the enum, not just unused here).
+    //
+    // The hatched Anima itself is NOT resolved by this method -- Economy has no reference to
+    // Weaving (the reverse dependency already exists: WeavingService uses PersistentLedger), and
+    // more importantly there's nowhere to put a "hatched Anima" yet: no Anima-materialization step
+    // exists anywhere in the codebase (Id/Name/Gen assignment, adding to a Sanctum roster) -- see
+    // Anima.Core.Weaving.BossHatchService's own doc comment. The caller (a future Run layer) is
+    // expected to call BossHatchService.Roll(rng) as a SEPARATE step alongside this one, same
+    // "caller resolves each side-effect individually" pattern Ember drops already use.
     public static void GrantBossWin(PersistentLedger ledger, Random rng, RunLedger? runLedger = null)
     {
         ledger.Add(ResourceType.Wisp, ApplyWispCharm(BossWinWisp, runLedger));
-        ledger.Add(ResourceType.Vessel, 1);
-        ledger.Add(RollShardType(rng), 1);
+        ledger.Add(ResourceType.EchoShard, 1);
     }
 
     private static int ApplyWispCharm(int baseWisp, RunLedger? runLedger)
@@ -107,8 +119,6 @@ public static class RewardService
         return (int)Math.Round(baseWisp * WispCharmMultiplier);
     }
 
-    private static ResourceType RollShardType(Random rng) =>
-        rng.NextDouble() < 0.5 ? ResourceType.EchoShard : ResourceType.VesselShard;
 
     // Marked Coin's on-pickup bonus roll. Not specified anywhere, so weighted deliberately toward
     // the common resources (Wisp/Ember) and away from the two Shard types -- a single (possibly

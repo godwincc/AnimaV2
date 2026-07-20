@@ -17,6 +17,23 @@ public static class SkillPool
         return candidates[rng.Next(candidates.Count)].Clone();
     }
 
+    // Color-filtered variant -- added for BossHatchService, which needs "1 random skill from color
+    // X's pool for part P" with no second parent to weight against. ByPart's skills already each
+    // carry their own Color (every Primitive's own 4 parts all share that Primitive's single body
+    // Color -- see PrimitiveRoster), so this is a filter over existing data, not a new pool: 3
+    // candidates per (Part, Color) pair (one per Archetype), never empty for any of the 4 base
+    // colors. Hybrid colors (Vulcan/Mirage) have no Primitives and so no candidates -- callers must
+    // only pass a base color, which BossHatchService's own roll already guarantees.
+    public static Skill RollRandom(Part part, AnimaColor color, Random rng)
+    {
+        var candidates = ByPart[part].Where(s => s.Color == color).ToList();
+        if (candidates.Count == 0)
+        {
+            throw new InvalidOperationException($"No {color} skills exist in the {part} pool.");
+        }
+        return candidates[rng.Next(candidates.Count)].Clone();
+    }
+
     private static IReadOnlyDictionary<Part, IReadOnlyList<Skill>> Build()
     {
         var head = new List<Skill>();

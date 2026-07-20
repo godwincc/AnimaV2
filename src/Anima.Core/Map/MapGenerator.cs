@@ -15,15 +15,50 @@ public static class MapGenerator
     private const int Floor14Index = 13; // Shop banned here specifically
     private const int Floor15Index = 14; // fixed Shop; Boss connects from every node here
 
-    // Reforge's 5% comes out of Combat's prior 40% share; Elite/Resource/Treasure/Shop unchanged.
+    // Map Odds Rebalance (LOCKED): Reforge set to 0% -- Option A, its old 5% spread evenly across
+    // the other 5 types (35->36, 15->16 x4). Reforge stays fully real/implemented code (RollOffer,
+    // Accept, targeting flow); this is a probability change only, re-enabled later by restoring a
+    // nonzero weight here, nothing else needs to change.
+    //
+    // Reforge MUST stay the LAST entry in this array for its 0.0 weight to be truly unreachable,
+    // not just "practically never" -- see AssignRandomType's weighted-roll loop: `roll` is always
+    // strictly < the cumulative total (Random.NextDouble() never returns 1.0), so the entry whose
+    // cumulative first reaches/exceeds `roll` always wins BEFORE the loop ever reaches a trailing
+    // 0-weight entry (adding 0 can't move the cumulative past what the previous real entry already
+    // covered). Moving a 0-weight entry to any position OTHER than last, or adding a 6th type after
+    // it, would break this guarantee and make that entry reachable again by whatever weight follows
+    // it in iteration order.
     private static readonly (MapNodeType Type, double Weight)[] TypeOdds =
     [
-        (MapNodeType.Combat, 0.35),
-        (MapNodeType.Elite, 0.15),
-        (MapNodeType.Resource, 0.15),
-        (MapNodeType.Treasure, 0.15),
-        (MapNodeType.Shop, 0.15),
-        (MapNodeType.Reforge, 0.05),
+        (MapNodeType.Combat, 0.36),
+        (MapNodeType.Elite, 0.16),
+        (MapNodeType.Resource, 0.16),
+        (MapNodeType.Treasure, 0.16),
+        (MapNodeType.Shop, 0.16),
+        (MapNodeType.Reforge, 0.00),
+    ];
+
+    // Guaranteed Elite + Early-Game Elite Exclusion (LOCKED, STS-inspired). Used in place of
+    // TypeOdds for Floors 1-5 (floorIndex 0-4): Elite is omitted entirely (not a 0-weight entry --
+    // there's no adjacent-zero-weight invariant to maintain here since nothing needs it to be
+    // last), its 16% split evenly 4 ways onto Combat/Resource/Treasure/Shop (+4% each: 36->40,
+    // 16->20 x3). Reforge is likewise omitted (it's 0% everywhere already, see TypeOdds' own
+    // comment) rather than duplicated here.
+    //
+    // FLAGGED: Shop's own +4% share here never actually manifests on a real map. Shop is ALSO
+    // independently banned on Floors 1-5 by the pre-existing EliteShopMinFloorIndex check below (a
+    // joint Elite+Shop floor gate from an earlier session, unrelated to and untouched by this
+    // one) -- so `excluded` still filters Shop out of `allowed` regardless of its weight here. The
+    // real, observable Floors-1-5 distribution ends up Combat/Resource/Treasure only, renormalized
+    // among just those three. This table is still written the way it's written (naming Shop
+    // explicitly at its "fair" redistributed weight) because that's what was actually asked for,
+    // and because it costs nothing to be technically correct even where it's practically moot.
+    private static readonly (MapNodeType Type, double Weight)[] EarlyFloorTypeOdds =
+    [
+        (MapNodeType.Combat, 0.40),
+        (MapNodeType.Resource, 0.20),
+        (MapNodeType.Treasure, 0.20),
+        (MapNodeType.Shop, 0.20),
     ];
 
     // Elite, Shop, and Reforge can't be directly connected to a *different* member of this group
@@ -125,22 +160,63 @@ public static class MapGenerator
         foreach (var node in map.Floors[Floor9Index]) node.Type = MapNodeType.Treasure;
         foreach (var node in map.Floors[Floor15Index]) node.Type = MapNodeType.Shop;
 
+        // Guaranteed Elite (LOCKED, STS-inspired): before the normal weighted roll runs anywhere,
+        // force exactly one randomly-chosen eligible node to Elite. This is a FLOOR, not a cap --
+        // the normal roll (Elite still in TypeOdds at 16%) proceeds as usual for every other node
+        // afterward, so a map can end up with more than 1 Elite, just never fewer than 1.
+        //
+        // Eligible = Floor 6 through Floor 14 (floorIndex 5-13), excluding Floor 9 (floorIndex 8,
+        // already fixed Treasure). Floor 15/Boss are outside this range already, per the brief.
+        //
+        // FLAGGED DEVIATION from the literal brief: Floor 14 (floorIndex 13) is ALSO excluded here,
+        // on top of Floor 9 -- every Floor 14 node has a Next edge straight into Floor 15 (entirely
+        // fixed Shop, see the AddEdge loop above), and Elite+Shop direct adjacency is already banned
+        // by NoAdjacentGroup (this is the SAME rule that already makes Floor 14 unable to roll Elite
+        // under the normal weighted path today). Forcing an Elite onto Floor 14 would create a
+        // guaranteed, unavoidable rule violation the 500-seed batch validator would catch every
+        // time. This node-picking step bypasses AssignRandomType entirely (direct assignment, no
+        // exclusion-checking) precisely because it's meant to override the normal odds -- but it
+        // still can't be allowed to violate a structural adjacency rule, so Floor 14 has to come out
+        // of the candidate pool rather than being included as asked.
+        //
+        // No interaction with the Reforge-0%-safety invariant documented on TypeOdds above: this is
+        // a direct `.Type =` assignment on one node, never touching TypeOdds, `allowed`, or the
+        // weighted-roll loop at all -- it can only ever produce Elite, never Reforge, and doesn't
+        // change array order or contents.
+        var guaranteedEliteCandidates = new List<MapNode>();
+        for (var floor = EliteShopMinFloorIndex; floor < Floor14Index; floor++)
+        {
+            if (floor == Floor9Index) continue;
+            guaranteedEliteCandidates.AddRange(map.Floors[floor]);
+        }
+        // Always non-empty in practice: every one of the 6 path chains touches every floor
+        // (BuildPath iterates floor 0 through FloorCount-2, i.e. every floor gets at least one
+        // node), so Floors 6-13 always have candidates.
+        var guaranteedElite = guaranteedEliteCandidates[rng.Next(guaranteedEliteCandidates.Count)];
+        guaranteedElite.Type = MapNodeType.Elite;
+
         for (var floor = 1; floor < DungeonMap.FloorCount; floor++)
         {
             if (floor == Floor9Index || floor == Floor15Index) continue;
-            foreach (var node in map.Floors[floor]) node.Type = AssignRandomType(node, floor, rng);
+            foreach (var node in map.Floors[floor])
+            {
+                if (node == guaranteedElite) continue; // already force-assigned above
+                node.Type = AssignRandomType(node, floor, rng);
+            }
         }
     }
 
     private static MapNodeType AssignRandomType(MapNode node, int floorIndex, Random rng)
     {
+        // Floors 1-5 (floorIndex 0-4) use EarlyFloorTypeOdds, which excludes Elite structurally
+        // (it's simply not one of the 4 entries) rather than via the `excluded` set below -- see
+        // that table's own comment. Shop's floor-6 minimum below is a separate, still-active rule
+        // and still needs its own exclusion regardless of which table is in play.
+        var baseOdds = floorIndex <= EliteShopMinFloorIndex - 1 ? EarlyFloorTypeOdds : TypeOdds;
+
         var excluded = new HashSet<MapNodeType>();
 
-        if (floorIndex <= EliteShopMinFloorIndex - 1)
-        {
-            excluded.Add(MapNodeType.Elite);
-            excluded.Add(MapNodeType.Shop);
-        }
+        if (floorIndex <= EliteShopMinFloorIndex - 1) excluded.Add(MapNodeType.Shop);
         if (floorIndex == Floor14Index) excluded.Add(MapNodeType.Shop);
 
         // Checks both directions: predecessors are always already-assigned by this point (forward
@@ -171,19 +247,19 @@ public static class MapGenerator
             }
         }
 
-        var allowed = TypeOdds.Where(t => !excluded.Contains(t.Type)).ToList();
+        var allowed = baseOdds.Where(t => !excluded.Contains(t.Type)).ToList();
         if (allowed.Count == 0)
         {
             // Soft constraints (adjacency group + sibling duplication) exhausted every option -
             // fall back to only the hard, floor-position bans so we always produce a valid pick.
+            // Elite needs no entry here for early floors -- baseOdds (EarlyFloorTypeOdds) already
+            // excludes it structurally, same as the primary path above. Shop's floor-6 minimum is
+            // a hard floor-position rule (not a soft adjacency/sibling one), so it still needs
+            // reinstating here for both the early-floor and Floor-14 cases.
             var hardBans = new HashSet<MapNodeType>();
-            if (floorIndex <= EliteShopMinFloorIndex - 1)
-            {
-                hardBans.Add(MapNodeType.Elite);
-                hardBans.Add(MapNodeType.Shop);
-            }
+            if (floorIndex <= EliteShopMinFloorIndex - 1) hardBans.Add(MapNodeType.Shop);
             if (floorIndex == Floor14Index) hardBans.Add(MapNodeType.Shop);
-            allowed = TypeOdds.Where(t => !hardBans.Contains(t.Type)).ToList();
+            allowed = baseOdds.Where(t => !hardBans.Contains(t.Type)).ToList();
         }
 
         var total = allowed.Sum(t => t.Weight);
@@ -194,6 +270,12 @@ public static class MapGenerator
             cumulative += weight;
             if (roll <= cumulative) return type;
         }
+        // Unreachable in practice -- `total` and this loop's final `cumulative` are computed via
+        // the identical sequential floating-point sum over the same `allowed` order, so they're
+        // bit-identical, and roll < total strictly (NextDouble() never returns 1.0). Kept as a
+        // safety net regardless. See TypeOdds' own comment: this is also why Reforge's 0.0 weight
+        // must stay LAST in the array -- if this fallback ever did fire with Reforge last, it would
+        // return Reforge, the one outcome the 0% odds are meant to rule out entirely.
         return allowed[^1].Type;
     }
 }

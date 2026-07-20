@@ -12,8 +12,4 @@ public enum ResourceType
     Wisp,
     EchoShard,
     VesselShard,
-
-    // A complete Vessel (Boss-only guaranteed drop). No richer representation (e.g. a pre-rolled
-    // genome payload) exists yet -- this is a plain count stub, per RewardService's scope note.
-    Vessel,
 }

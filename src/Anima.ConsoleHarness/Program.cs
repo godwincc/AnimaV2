@@ -5,8 +5,81 @@ using Anima.Core.Enums;
 using Anima.Core.Map;
 using Anima.Core.Models;
 using Anima.Core.Reforge;
+using Anima.Core.Run;
 using Anima.Core.Weaving;
 using AnimaUnit = Anima.Core.Models.Anima;
+
+// ==== MAP GENERATION — batch validation across many seeded maps (Map Odds Rebalance +
+// ==== Guaranteed Elite / Early-Game Elite Exclusion sessions) ====
+// The original "500 seeded maps pass every rule" claim (CLAUDE.md) had no actual batch-loop test
+// anywhere in this codebase before the Map Odds Rebalance session -- MapPrinter.Validate was only
+// ever called against a single seeded map (see the Delve Simulation section further down). Every
+// TypeOdds/AssignTypes change (Reforge 5%->0%, Elite excluded Floors 1-5, Elite guaranteed Floors
+// 6-14) is exactly the kind of change that claim needs RE-proving against, not assuming still
+// holds -- this is that proof, and it's a permanent, re-runnable check now, not a one-off script.
+Console.WriteLine("================ Map Generation: batch validation across 500 seeded maps ================");
+
+const int MapBatchCount = 500;
+const int MapBatchSeedBase = 100_000; // arbitrary, well clear of every other seed literal in this file
+const int MapBatchEarlyFloorCount = 5; // Floors 1-5 (floorIndex 0-4) -- Elite exclusion zone
+var mapBatchViolations = new List<string>();
+var mapBatchTypeCounts = new Dictionary<MapNodeType, int>();
+foreach (MapNodeType type in Enum.GetValues<MapNodeType>()) mapBatchTypeCounts[type] = 0;
+var mapBatchEarlyEliteOccurrences = 0;
+var mapBatchMapsWithNoElite = 0;
+
+for (var mapBatchI = 0; mapBatchI < MapBatchCount; mapBatchI++)
+{
+    var mapBatchSeed = MapBatchSeedBase + mapBatchI;
+    var mapBatchMap = MapGenerator.Generate(new Random(mapBatchSeed));
+    var mapBatchMapViolations = Anima.ConsoleHarness.MapPrinter.Validate(mapBatchMap);
+    foreach (var violation in mapBatchMapViolations) mapBatchViolations.Add($"[seed {mapBatchSeed}] {violation}");
+
+    var mapBatchThisMapEliteCount = 0;
+    for (var mapBatchFloorIdx = 0; mapBatchFloorIdx < mapBatchMap.Floors.Count; mapBatchFloorIdx++)
+    {
+        foreach (var node in mapBatchMap.Floors[mapBatchFloorIdx])
+        {
+            if (node.Type is not { } nodeType) continue;
+            mapBatchTypeCounts[nodeType]++;
+            if (nodeType == MapNodeType.Elite)
+            {
+                mapBatchThisMapEliteCount++;
+                if (mapBatchFloorIdx < MapBatchEarlyFloorCount) mapBatchEarlyEliteOccurrences++;
+            }
+        }
+    }
+    if (mapBatchThisMapEliteCount == 0) mapBatchMapsWithNoElite++;
+
+    // Boss is a single fixed node every map has, not part of the random TypeOdds roll -- counted
+    // separately so it doesn't skew the "per-map average" numbers below, which report the random
+    // distribution, same framing as the original 22.84/13.64 Combat/Treasure report.
+    mapBatchTypeCounts[MapNodeType.Boss]++;
+}
+
+var mapBatchRulesPass = mapBatchViolations.Count == 0;
+Console.WriteLine($"  [{(mapBatchRulesPass ? "PASS" : "FAIL")}] 0 rule violations across {MapBatchCount} seeded maps (seeds {MapBatchSeedBase}-{MapBatchSeedBase + MapBatchCount - 1})");
+if (!mapBatchRulesPass)
+{
+    foreach (var violation in mapBatchViolations.Take(20)) Console.WriteLine($"    - {violation}");
+    if (mapBatchViolations.Count > 20) Console.WriteLine($"    ... and {mapBatchViolations.Count - 20} more");
+}
+
+var mapBatchReforgeZeroPass = mapBatchTypeCounts[MapNodeType.Reforge] == 0;
+Console.WriteLine($"  [{(mapBatchReforgeZeroPass ? "PASS" : "FAIL")}] Reforge never rolls onto any of the {MapBatchCount} maps at 0% odds ({mapBatchTypeCounts[MapNodeType.Reforge]} total occurrences)");
+
+var mapBatchNoEarlyElitePass = mapBatchEarlyEliteOccurrences == 0;
+Console.WriteLine($"  [{(mapBatchNoEarlyElitePass ? "PASS" : "FAIL")}] Elite never rolls on Floors 1-5 across {MapBatchCount} maps ({mapBatchEarlyEliteOccurrences} occurrences)");
+
+var mapBatchGuaranteedElitePass = mapBatchMapsWithNoElite == 0;
+Console.WriteLine($"  [{(mapBatchGuaranteedElitePass ? "PASS" : "FAIL")}] Every one of {MapBatchCount} maps has at least 1 Elite ({mapBatchMapsWithNoElite} maps with zero)");
+
+Console.WriteLine($"  Real per-map averages at the final odds (Combat36/Elite16/Resource16/Treasure16/Shop16/Reforge0 on Floors 6+; Combat40/Resource20/Treasure20/Shop20 on Floors 1-5, Elite excluded; +1 guaranteed Elite on Floors 6-14), n={MapBatchCount} maps:");
+foreach (MapNodeType type in Enum.GetValues<MapNodeType>())
+{
+    var mapBatchAvg = (double)mapBatchTypeCounts[type] / MapBatchCount;
+    Console.WriteLine($"    {type,-9} avg {mapBatchAvg:F2}/map (total {mapBatchTypeCounts[type]})");
+}
 
 // ==== WEAVING (BREEDING) — DISTRIBUTION VALIDATION ====
 // Two checks, both statistical (many trials, tolerance bands around the design's stated
@@ -405,17 +478,19 @@ var poorReforgePass = !poorReforgeAcceptSuccess
 Console.WriteLine($"  [{(poorReforgePass ? "PASS" : "FAIL")}] Insufficient Wisp rejects Reforge Accept before charging or swapping anything");
 
 // ==== REWARDS — RewardService node-outcome grants ====
-// None of these Wisp amounts, the Elite shard chance, or the Boss either/or shard pick existed
-// anywhere before RewardService -- see its doc comments for the reasoning behind each number.
+// None of these Wisp amounts or shard chances existed anywhere before RewardService -- see its
+// doc comments for the reasoning behind each number.
 //
 // Ember is momentary now, not a ledger balance (see ResourceType's own comment) -- every grant
 // method that can drop Ember returns the dropped color(s) instead of writing them into the
 // ledger, so these trials collect the returned lists directly rather than diffing a balance.
 // Four checks: Combat (exact Wisp, exactly 1 guaranteed Ember/win, ~25% per color, no shards),
 // Elite (exact Wisp, 1 guaranteed Ember + ~25% independent chance each for a 2nd/3rd, ~25%
-// shard-trigger rate, never both shard types at once), Resource (exact Wisp, ~15% chance of
-// exactly 1 bonus Ember), and Boss (exact Wisp, guaranteed Vessel, guaranteed exactly-one shard
-// fragment every time, ~50/50 split between the two shard types, no Ember at all).
+// chance of exactly 1 Vessel Shard, never an Echo Shard), Resource (exact Wisp, ~15% chance of
+// exactly 1 bonus Ember), and Boss (exact Wisp, guaranteed exactly 1 Echo Shard every time, never
+// a Vessel Shard, no Ember at all -- the old "complete Vessel" resource and the old 50/50
+// Echo/Vessel shard pick are both retired; Boss's guaranteed hatched Anima is a separate roll, see
+// the Boss-hatch section below).
 
 Console.WriteLine();
 Console.WriteLine("================ Rewards: RewardService node-outcome grants ================");
@@ -433,8 +508,7 @@ for (var i = 0; i < CombatTrials; i++)
 var combatWispPass = combatLedger.GetBalance(ResourceType.Wisp) == CombatTrials * RewardService.CombatWinWisp;
 var combatEmberTotalDraws = combatEmberDrops.Count;
 var combatEmberCountPass = combatEmberTotalDraws == CombatTrials; // exactly 1 guaranteed per win, always
-var combatNoShardsPass = combatLedger.GetBalance(ResourceType.EchoShard) == 0 && combatLedger.GetBalance(ResourceType.VesselShard) == 0
-    && combatLedger.GetBalance(ResourceType.Vessel) == 0;
+var combatNoShardsPass = combatLedger.GetBalance(ResourceType.EchoShard) == 0 && combatLedger.GetBalance(ResourceType.VesselShard) == 0;
 
 Console.WriteLine($"  [{(combatWispPass ? "PASS" : "FAIL")}] Combat win grants exact Wisp ({CombatTrials}x{RewardService.CombatWinWisp} = {CombatTrials * RewardService.CombatWinWisp} -> {combatLedger.GetBalance(ResourceType.Wisp)})");
 Console.WriteLine($"  [{(combatEmberCountPass ? "PASS" : "FAIL")}] Combat win drops exactly 1 Ember per win, guaranteed ({combatEmberTotalDraws}/{CombatTrials})");
@@ -442,7 +516,7 @@ ReportBucket("EmberCrimson", combatEmberDrops.Count(c => c == AnimaColor.Crimson
 ReportBucket("EmberOnyx", combatEmberDrops.Count(c => c == AnimaColor.Onyx), combatEmberTotalDraws, 0.25);
 ReportBucket("EmberVerdant", combatEmberDrops.Count(c => c == AnimaColor.Verdant), combatEmberTotalDraws, 0.25);
 ReportBucket("EmberAzure", combatEmberDrops.Count(c => c == AnimaColor.Azure), combatEmberTotalDraws, 0.25);
-Console.WriteLine($"  [{(combatNoShardsPass ? "PASS" : "FAIL")}] Combat win grants no Shards/Vessel");
+Console.WriteLine($"  [{(combatNoShardsPass ? "PASS" : "FAIL")}] Combat win grants no Shards");
 
 // ---- Elite win ----
 Console.WriteLine();
@@ -450,15 +524,16 @@ const int EliteTrials = 4000;
 var eliteLedger = new PersistentLedger();
 var eliteEmberDropsPerWin = new List<List<AnimaColor>>();
 var eliteShardTriggerCount = 0;
-var eliteMultiShardViolation = false;
+var eliteEchoShardViolation = false;
 for (var i = 0; i < EliteTrials; i++)
 {
     var echoBefore = eliteLedger.GetBalance(ResourceType.EchoShard);
     var vesselBefore = eliteLedger.GetBalance(ResourceType.VesselShard);
     eliteEmberDropsPerWin.Add(RewardService.GrantEliteWin(eliteLedger, rewardRng));
-    var shardDelta = (eliteLedger.GetBalance(ResourceType.EchoShard) - echoBefore) + (eliteLedger.GetBalance(ResourceType.VesselShard) - vesselBefore);
-    if (shardDelta > 1) eliteMultiShardViolation = true;
-    if (shardDelta == 1) eliteShardTriggerCount++;
+    var echoDelta = eliteLedger.GetBalance(ResourceType.EchoShard) - echoBefore;
+    var vesselDelta = eliteLedger.GetBalance(ResourceType.VesselShard) - vesselBefore;
+    if (echoDelta != 0) eliteEchoShardViolation = true; // Elite must NEVER drop an Echo Shard -- Vessel-only, per the locked Match Result & Retreat design
+    if (vesselDelta == 1) eliteShardTriggerCount++;
 }
 var eliteWispPass = eliteLedger.GetBalance(ResourceType.Wisp) == EliteTrials * RewardService.EliteWinWisp;
 var eliteEmberDrops = eliteEmberDropsPerWin.SelectMany(d => d).ToList();
@@ -482,8 +557,8 @@ ReportBucket("EmberCrimson", eliteEmberDrops.Count(c => c == AnimaColor.Crimson)
 ReportBucket("EmberOnyx", eliteEmberDrops.Count(c => c == AnimaColor.Onyx), eliteEmberTotalDraws, 0.25);
 ReportBucket("EmberVerdant", eliteEmberDrops.Count(c => c == AnimaColor.Verdant), eliteEmberTotalDraws, 0.25);
 ReportBucket("EmberAzure", eliteEmberDrops.Count(c => c == AnimaColor.Azure), eliteEmberTotalDraws, 0.25);
-Console.WriteLine($"  [{(!eliteMultiShardViolation ? "PASS" : "FAIL")}] Elite win never grants both Shard types in the same win");
-ReportBucket("Elite shard trigger", eliteShardTriggerCount, EliteTrials, RewardService.EliteShardChance);
+Console.WriteLine($"  [{(!eliteEchoShardViolation ? "PASS" : "FAIL")}] Elite win never grants an Echo Shard -- shard fragment is always a Vessel Shard ({EliteTrials} trials, 0 violations expected)");
+ReportBucket("Elite Vessel Shard trigger", eliteShardTriggerCount, EliteTrials, RewardService.EliteShardChance);
 
 // ---- Resource node ----
 Console.WriteLine();
@@ -495,35 +570,116 @@ for (var i = 0; i < ResourceTrials; i++)
     resourceEmberDropCount += RewardService.GrantResourceNode(resourceLedger, rewardRng).Count;
 }
 var resourcePass = resourceLedger.GetBalance(ResourceType.Wisp) == ResourceTrials * RewardService.ResourceNodeWisp
-    && resourceLedger.GetBalance(ResourceType.EchoShard) == 0 && resourceLedger.GetBalance(ResourceType.VesselShard) == 0
-    && resourceLedger.GetBalance(ResourceType.Vessel) == 0;
-Console.WriteLine($"  [{(resourcePass ? "PASS" : "FAIL")}] Resource node grants exact Wisp, no Shards/Vessel ({ResourceTrials}x{RewardService.ResourceNodeWisp} = {ResourceTrials * RewardService.ResourceNodeWisp} -> {resourceLedger.GetBalance(ResourceType.Wisp)})");
+    && resourceLedger.GetBalance(ResourceType.EchoShard) == 0 && resourceLedger.GetBalance(ResourceType.VesselShard) == 0;
+Console.WriteLine($"  [{(resourcePass ? "PASS" : "FAIL")}] Resource node grants exact Wisp, no Shards ({ResourceTrials}x{RewardService.ResourceNodeWisp} = {ResourceTrials * RewardService.ResourceNodeWisp} -> {resourceLedger.GetBalance(ResourceType.Wisp)})");
 ReportBucket("Resource bonus Ember", resourceEmberDropCount, ResourceTrials, RewardService.ResourceBonusEmberChance);
 
-// ---- Boss win ----
+// ---- Boss win — RewardService (Wisp + guaranteed Echo Shard; Vessel resource retired, hatched
+// Anima resolved separately via BossHatchService, see below) ----
 Console.WriteLine();
 const int BossTrials = 2000;
 var bossLedger = new PersistentLedger();
-var bossMultiShardViolation = false;
-var bossZeroShardViolation = false;
 for (var i = 0; i < BossTrials; i++)
 {
-    var echoBefore = bossLedger.GetBalance(ResourceType.EchoShard);
-    var vesselBefore = bossLedger.GetBalance(ResourceType.VesselShard);
     RewardService.GrantBossWin(bossLedger, rewardRng);
-    var shardDelta = (bossLedger.GetBalance(ResourceType.EchoShard) - echoBefore) + (bossLedger.GetBalance(ResourceType.VesselShard) - vesselBefore);
-    if (shardDelta > 1) bossMultiShardViolation = true;
-    if (shardDelta != 1) bossZeroShardViolation = true; // guaranteed -- must be exactly 1 every time
 }
 var bossWispPass = bossLedger.GetBalance(ResourceType.Wisp) == BossTrials * RewardService.BossWinWisp;
-var bossVesselPass = bossLedger.GetBalance(ResourceType.Vessel) == BossTrials;
-var bossTotalShards = bossLedger.GetBalance(ResourceType.EchoShard) + bossLedger.GetBalance(ResourceType.VesselShard);
+var bossEchoShardPass = bossLedger.GetBalance(ResourceType.EchoShard) == BossTrials && bossLedger.GetBalance(ResourceType.VesselShard) == 0;
 
 Console.WriteLine($"  [{(bossWispPass ? "PASS" : "FAIL")}] Boss win grants exact Wisp ({BossTrials}x{RewardService.BossWinWisp} = {BossTrials * RewardService.BossWinWisp} -> {bossLedger.GetBalance(ResourceType.Wisp)})");
-Console.WriteLine($"  [{(bossVesselPass ? "PASS" : "FAIL")}] Boss win grants exactly 1 Vessel every time ({bossLedger.GetBalance(ResourceType.Vessel)}/{BossTrials})");
-Console.WriteLine($"  [{(!bossZeroShardViolation ? "PASS" : "FAIL")}] Boss win grants exactly 1 Shard fragment every time, never 0 ({bossTotalShards}/{BossTrials})");
-Console.WriteLine($"  [{(!bossMultiShardViolation ? "PASS" : "FAIL")}] Boss win never grants both Shard types at once");
-ReportBucket("Boss EchoShard-of-shards", bossLedger.GetBalance(ResourceType.EchoShard), bossTotalShards, 0.5);
+Console.WriteLine($"  [{(bossEchoShardPass ? "PASS" : "FAIL")}] Boss win grants exactly 1 Echo Shard every time, never a Vessel Shard ({bossLedger.GetBalance(ResourceType.EchoShard)}/{BossTrials} EchoShard, {bossLedger.GetBalance(ResourceType.VesselShard)} VesselShard)");
+
+// ---- Boss-hatch Anima roll — BossHatchService (no Wisp/Shard involved, pure genome roll) ----
+// Returns a full AnimaGenome (Dominant+R1+R2 per part, LOCKED by the Anima Materialization design
+// session so Boss-hatch Animas are fully Weave-eligible later with no special-casing).
+Console.WriteLine();
+Console.WriteLine("================ Boss-hatch: BossHatchService.Roll ================");
+const int HatchTrials = 4000;
+var hatchRng = new Random(777);
+var hatchGenomes = new List<AnimaGenome>();
+for (var i = 0; i < HatchTrials; i++)
+{
+    hatchGenomes.Add(BossHatchService.Roll(hatchRng));
+}
+
+var hatchNoHybridsPass = hatchGenomes.All(g => g.Color is AnimaColor.Crimson or AnimaColor.Onyx or AnimaColor.Verdant or AnimaColor.Azure);
+Console.WriteLine($"  [{(hatchNoHybridsPass ? "PASS" : "FAIL")}] Boss-hatch body Color is always a base color, never Vulcan/Mirage ({HatchTrials} trials)");
+ReportBucket("Hatch body Crimson", hatchGenomes.Count(g => g.Color == AnimaColor.Crimson), HatchTrials, 0.25);
+ReportBucket("Hatch body Onyx", hatchGenomes.Count(g => g.Color == AnimaColor.Onyx), HatchTrials, 0.25);
+ReportBucket("Hatch body Verdant", hatchGenomes.Count(g => g.Color == AnimaColor.Verdant), HatchTrials, 0.25);
+ReportBucket("Hatch body Azure", hatchGenomes.Count(g => g.Color == AnimaColor.Azure), HatchTrials, 0.25);
+
+// Every (Part, Dominant/R1/R2) roll pooled together (4000 trials x 4 parts x 3 rolls = 48000 draws)
+// -- each is an independent 55%-toward-body-Color/15%-each-other roll, same weighting for all three,
+// no ordering/rarity relationship between Dominant and the synthesized R1/R2.
+(AnimaColor BodyColor, Part Part, Skill Skill)[] HatchRolls(AnimaGenome g) =>
+[
+    (g.Color, Part.Head, g.Head.Dominant), (g.Color, Part.Head, g.Head.R1), (g.Color, Part.Head, g.Head.R2),
+    (g.Color, Part.Frame, g.Frame.Dominant), (g.Color, Part.Frame, g.Frame.R1), (g.Color, Part.Frame, g.Frame.R2),
+    (g.Color, Part.Tail, g.Tail.Dominant), (g.Color, Part.Tail, g.Tail.R1), (g.Color, Part.Tail, g.Tail.R2),
+    (g.Color, Part.Crest, g.Crest.Dominant), (g.Color, Part.Crest, g.Crest.R1), (g.Color, Part.Crest, g.Crest.R2),
+];
+var hatchDraws = hatchGenomes.SelectMany(HatchRolls).ToList();
+var hatchDrawTotal = hatchDraws.Count;
+ReportBucket("Hatch roll Color matches body Color", hatchDraws.Count(d => d.Skill.Color == d.BodyColor), hatchDrawTotal, 0.55);
+ReportBucket("Hatch roll Color is one specific OTHER color", hatchDraws.Count(d => d.Skill.Color != d.BodyColor && d.Skill.Color == AnimaColor.Crimson), hatchDraws.Count(d => d.BodyColor != AnimaColor.Crimson), 0.15);
+
+var hatchSkillPartMatchesSlotPass = hatchDraws.All(d => d.Skill.Part == d.Part);
+Console.WriteLine($"  [{(hatchSkillPartMatchesSlotPass ? "PASS" : "FAIL")}] Every rolled skill's own Part always matches the slot it was rolled into ({hatchDrawTotal} rolls checked)");
+
+// AnimaGenome.IsFullyPure (Weaving's own hybrid-eligibility check) needs no Boss-hatch-specific
+// handling at all -- proof that BossHatchService's output really is a normal AnimaGenome, not a
+// lookalike: expected true only when all 4 independently-rolled Dominants happen to match the
+// body Color, 0.55^4 ~= 9.15% of hatches.
+var hatchFullyPureCount = hatchGenomes.Count(g => g.IsFullyPure);
+ReportBucket("Hatch genome IsFullyPure (all 4 Dominants match body Color)", hatchFullyPureCount, HatchTrials, Math.Pow(0.55, 4));
+
+// ---- Anima Materialization — AnimaMaterializationService + SanctumRoster ----
+Console.WriteLine();
+Console.WriteLine("================ Anima Materialization: AnimaMaterializationService / SanctumRoster ================");
+
+// Boss-hatch path: Gen fixed at 1, no parents, Stats resolved from WeavingService.ColorStats.
+var hatchMaterializeRoster = new SanctumRoster();
+var hatchGenomeForMaterialize = BossHatchService.Roll(new Random(31337));
+var hatchedAnima = AnimaMaterializationService.Create(hatchGenomeForMaterialize, "Hatchling", hatchMaterializeRoster);
+var hatchMaterializePass = hatchedAnima.Gen == 1 && hatchedAnima.ParentAId == null && hatchedAnima.ParentBId == null
+    && hatchedAnima.Name == "Hatchling" && !string.IsNullOrEmpty(hatchedAnima.Id)
+    && hatchedAnima.Color == hatchGenomeForMaterialize.Color
+    && hatchedAnima.Head.Name == hatchGenomeForMaterialize.Head.Dominant.Name
+    && hatchedAnima.Frame.Name == hatchGenomeForMaterialize.Frame.Dominant.Name
+    && hatchedAnima.Tail.Name == hatchGenomeForMaterialize.Tail.Dominant.Name
+    && hatchedAnima.Crest.Name == hatchGenomeForMaterialize.Crest.Dominant.Name
+    && hatchedAnima.BaseStats.MaxHp == WeavingService.ColorStats[hatchGenomeForMaterialize.Color].MaxHp
+    && hatchedAnima.CurrentHp == hatchedAnima.MaxHp
+    && hatchMaterializeRoster.Animas.Count == 1 && ReferenceEquals(hatchMaterializeRoster.Animas[0], hatchedAnima)
+    && ReferenceEquals(hatchMaterializeRoster.FindById(hatchedAnima.Id), hatchedAnima);
+Console.WriteLine($"  [{(hatchMaterializePass ? "PASS" : "FAIL")}] Boss-hatch materialization: Gen=1, no parents, correct Stats/Dominants, added to SanctumRoster and findable by Id");
+
+// Weave path: Gen = max(parentA.Gen, parentB.Gen) + 1, lineage recorded.
+var materializeParentA = SampleAnimas.CreateEmber();
+materializeParentA.Gen = 2;
+var materializeParentB = SampleAnimas.CreateReaper();
+materializeParentB.Gen = 5;
+var materializeGenomeA = GenomeFactory.CreateFounderGenome(materializeParentA);
+var materializeGenomeB = GenomeFactory.CreateFounderGenome(materializeParentB);
+var materializeWeaveResult = WeavingService.Weave(materializeGenomeA, materializeGenomeB, new Random(2024));
+var weaveMaterializeRoster = new SanctumRoster();
+var weaveMaterializedAnima = AnimaMaterializationService.Create(materializeWeaveResult, materializeParentA, materializeParentB, "Cindertail", weaveMaterializeRoster);
+var weaveMaterializePass = weaveMaterializedAnima.Gen == 6 // max(2,5)+1
+    && weaveMaterializedAnima.ParentAId == materializeParentA.Id && weaveMaterializedAnima.ParentBId == materializeParentB.Id
+    && weaveMaterializedAnima.Name == "Cindertail" && weaveMaterializedAnima.Id != materializeParentA.Id && weaveMaterializedAnima.Id != materializeParentB.Id
+    && weaveMaterializedAnima.Color == materializeWeaveResult.Genome.Color
+    && weaveMaterializeRoster.Animas.Count == 1 && ReferenceEquals(weaveMaterializeRoster.Animas[0], weaveMaterializedAnima);
+Console.WriteLine($"  [{(weaveMaterializePass ? "PASS" : "FAIL")}] Weave materialization: Gen=max(2,5)+1={weaveMaterializedAnima.Gen} (expected 6), ParentAId/ParentBId recorded, added to SanctumRoster");
+
+// Every materialized Anima gets its own fresh, distinct Id -- no collision even across repeated calls.
+var idUniquenessRoster = new SanctumRoster();
+for (var i = 0; i < 200; i++)
+{
+    AnimaMaterializationService.Create(BossHatchService.Roll(hatchRng), $"Test{i}", idUniquenessRoster);
+}
+var idUniquenessPass = idUniquenessRoster.Animas.Select(a => a.Id).Distinct().Count() == 200;
+Console.WriteLine($"  [{(idUniquenessPass ? "PASS" : "FAIL")}] 200 materialized Animas all receive distinct Ids, no collisions ({idUniquenessRoster.Animas.Select(a => a.Id).Distinct().Count()}/200 unique)");
 
 // ---- Reward tier ladder sanity ----
 Console.WriteLine();
@@ -531,6 +687,111 @@ var wispOrderingPass = RewardService.ResourceNodeWisp < RewardService.CombatWinW
     && RewardService.CombatWinWisp < RewardService.EliteWinWisp
     && RewardService.EliteWinWisp < RewardService.BossWinWisp;
 Console.WriteLine($"  [{(wispOrderingPass ? "PASS" : "FAIL")}] Wisp reward tier ladder holds: Resource({RewardService.ResourceNodeWisp}) < Combat({RewardService.CombatWinWisp}) < Elite({RewardService.EliteWinWisp}) < Boss({RewardService.BossWinWisp})");
+
+// ==== DELVE END — DelveEndService.ResolveDefeat/ResolveRetreat (Match Result & Retreat System) ====
+Console.WriteLine();
+Console.WriteLine("================ Delve end: DelveEndService ================");
+
+// Defeat: pre-run Wisp must be untouched, only the this-run portion is subject to the 50% keep.
+var defeatLedger = new PersistentLedger();
+defeatLedger.Add(ResourceType.Wisp, 200); // banked from a prior Delve
+var defeatRunLedger = new RunLedger { WispAtDelveStart = 200 };
+defeatLedger.Add(ResourceType.Wisp, 340); // earned this run
+var defeatResult = DelveEndService.ResolveDefeat(defeatLedger, defeatRunLedger);
+var defeatPass = defeatResult.WispEarnedThisRun == 340 && defeatResult.WispKept == 170 && defeatResult.WispForfeited == 170
+    && defeatLedger.GetBalance(ResourceType.Wisp) == 200 + 170;
+Console.WriteLine($"  [{(defeatPass ? "PASS" : "FAIL")}] Defeat keeps exactly 50% of this-run Wisp only (earned=340 -> kept={defeatResult.WispKept}, forfeited={defeatResult.WispForfeited}), pre-run 200 untouched (final balance {defeatLedger.GetBalance(ResourceType.Wisp)}, expected 370)");
+
+// Retreat: 0% penalty -- keep 100% of this-run Wisp, ledger untouched.
+var retreatLedger = new PersistentLedger();
+retreatLedger.Add(ResourceType.Wisp, 200);
+var retreatRunLedger = new RunLedger { WispAtDelveStart = 200 };
+retreatLedger.Add(ResourceType.Wisp, 340);
+var retreatResult = DelveEndService.ResolveRetreat(retreatLedger, retreatRunLedger);
+var retreatPass = retreatResult.WispEarnedThisRun == 340 && retreatResult.WispKept == 340 && retreatResult.WispForfeited == 0
+    && retreatLedger.GetBalance(ResourceType.Wisp) == 200 + 340;
+Console.WriteLine($"  [{(retreatPass ? "PASS" : "FAIL")}] Retreat keeps 100% of this-run Wisp, ledger untouched (earned=340 -> kept={retreatResult.WispKept}, final balance {retreatLedger.GetBalance(ResourceType.Wisp)}, expected 540)");
+
+// Zero-earned edge case (e.g. a wipe on the very first node before any Wisp reward lands) -- both
+// methods must return 0/0/0 rather than throwing or going negative.
+var zeroEarnedLedger = new PersistentLedger();
+zeroEarnedLedger.Add(ResourceType.Wisp, 50);
+var zeroEarnedRunLedger = new RunLedger { WispAtDelveStart = 50 };
+var zeroEarnedResult = DelveEndService.ResolveDefeat(zeroEarnedLedger, zeroEarnedRunLedger);
+var zeroEarnedPass = zeroEarnedResult is { WispEarnedThisRun: 0, WispKept: 0, WispForfeited: 0 } && zeroEarnedLedger.GetBalance(ResourceType.Wisp) == 50;
+Console.WriteLine($"  [{(zeroEarnedPass ? "PASS" : "FAIL")}] Defeat with 0 Wisp earned this run forfeits nothing and leaves the pre-run balance untouched");
+
+// ==== DELVE RUN — Anima.Core.Run.DelveRun (the missing "where does this run currently stand" glue) ====
+Console.WriteLine();
+Console.WriteLine("================ Delve Run: DelveRun ================");
+
+var delveRunMap = MapGenerator.Generate(new Random(9001));
+var delveRunTeam = new List<AnimaUnit> { SampleAnimas.CreateBoulder(), SampleAnimas.CreateEmber(), SampleAnimas.CreateSprout() };
+var delveRunPersistentLedger = new PersistentLedger();
+delveRunPersistentLedger.Add(ResourceType.Wisp, 200); // banked from a prior Delve
+
+var delveRun = DelveRun.Start(delveRunMap, delveRunTeam, delveRunPersistentLedger);
+
+// Start() is the one real wiring gap this session found: WispAtDelveStart existed since last
+// session but nothing outside tests ever actually set it -- confirm Start does, correctly.
+var delveRunStartWispPass = delveRun.RunLedger.WispAtDelveStart == 200 && delveRun.WispEarnedSoFar == 0;
+Console.WriteLine($"  [{(delveRunStartWispPass ? "PASS" : "FAIL")}] DelveRun.Start snapshots WispAtDelveStart from the CURRENT PersistentLedger balance (200), WispEarnedSoFar starts at 0");
+
+delveRunPersistentLedger.Add(ResourceType.Wisp, 50); // simulate a Combat win's reward landing
+var delveRunEarnedPass = delveRun.WispEarnedSoFar == 50;
+Console.WriteLine($"  [{(delveRunEarnedPass ? "PASS" : "FAIL")}] WispEarnedSoFar tracks only Wisp gained AFTER Delve start (+50 -> {delveRun.WispEarnedSoFar}), pre-run 200 excluded");
+
+// Before any move: AvailableNodes is every zero-Previous node on Floor 1.
+var delveRunExpectedStartNodes = delveRunMap.Floors[0].Where(n => n.Previous.Count == 0).ToList();
+var delveRunInitialAvailablePass = delveRun.CurrentNode == null
+    && delveRun.AvailableNodes.Count == delveRunExpectedStartNodes.Count
+    && delveRunExpectedStartNodes.All(n => delveRun.AvailableNodes.Contains(n));
+Console.WriteLine($"  [{(delveRunInitialAvailablePass ? "PASS" : "FAIL")}] Before any move, AvailableNodes is exactly every zero-Previous Floor-1 node ({delveRun.AvailableNodes.Count} available)");
+
+// Rejects a move to a node that isn't currently reachable (a Floor 3 node, never adjacent to
+// CurrentNode==null's own start set).
+var delveRunIllegalTarget = delveRunMap.Floors[2].First();
+var delveRunIllegalMovePass = !delveRun.TryMoveTo(delveRunIllegalTarget) && delveRun.CurrentNode == null;
+Console.WriteLine($"  [{(delveRunIllegalMovePass ? "PASS" : "FAIL")}] TryMoveTo rejects a node outside AvailableNodes, CurrentNode stays null");
+
+// Legal move onto one of the real start nodes.
+var delveRunFirstNode = delveRun.AvailableNodes[0];
+var delveRunFirstMovePass = delveRun.TryMoveTo(delveRunFirstNode) && ReferenceEquals(delveRun.CurrentNode, delveRunFirstNode)
+    && delveRun.AvailableNodes.SequenceEqual(delveRunFirstNode.Next);
+Console.WriteLine($"  [{(delveRunFirstMovePass ? "PASS" : "FAIL")}] TryMoveTo a legal node succeeds, AvailableNodes updates to CurrentNode.Next");
+
+// MarkCurrentNodeCleared: nothing cleared until explicitly called, adds exactly the current node.
+var delveRunClearedBeforeCallPass = delveRun.ClearedNodes.Count == 0;
+delveRun.MarkCurrentNodeCleared();
+var delveRunClearedAfterCallPass = delveRun.ClearedNodes.Count == 1 && delveRun.ClearedNodes.Contains(delveRunFirstNode);
+Console.WriteLine($"  [{(delveRunClearedBeforeCallPass && delveRunClearedAfterCallPass ? "PASS" : "FAIL")}] MarkCurrentNodeCleared is caller-driven and adds exactly the current node ({delveRun.ClearedNodes.Count}/1)");
+
+// CurrentArtifacts is a live passthrough to RunLedger.Artifacts, not an independent copy that
+// could fall out of sync.
+var delveRunArtifact = SampleArtifacts.CreateWispCharm();
+delveRun.RunLedger.Artifacts.Add(delveRunArtifact);
+var delveRunArtifactPassthroughPass = delveRun.CurrentArtifacts.Count == 1 && ReferenceEquals(delveRun.CurrentArtifacts[0], delveRunArtifact);
+Console.WriteLine($"  [{(delveRunArtifactPassthroughPass ? "PASS" : "FAIL")}] CurrentArtifacts is a live passthrough to RunLedger.Artifacts");
+
+// HP attrition: Team holds the SAME Anima instances a Combat node's CombatState.PlayerTeam would
+// -- mutating CurrentHp (as CombatEngine does mid-fight) is visible through DelveRun.Team with no
+// explicit "hand off HP" step required.
+var delveRunDamagedAnima = delveRun.Team[0];
+var delveRunHpBefore = delveRunDamagedAnima.CurrentHp;
+delveRunDamagedAnima.CurrentHp -= 35; // simulate combat damage landing directly on the shared instance
+var delveRunHpAttritionPass = delveRun.Team[0].CurrentHp == delveRunHpBefore - 35 && ReferenceEquals(delveRun.Team[0], delveRunDamagedAnima);
+Console.WriteLine($"  [{(delveRunHpAttritionPass ? "PASS" : "FAIL")}] Team HP persists via shared Anima references, no separate HP snapshot needed ({delveRunHpBefore} -> {delveRun.Team[0].CurrentHp})");
+
+// Walk AvailableNodes[0] repeatedly to confirm Boss surfaces with no special-casing.
+var delveRunWalkGuard = 0;
+while (delveRun.CurrentNode!.Type != MapNodeType.Boss && delveRunWalkGuard < 30)
+{
+    delveRun.MarkCurrentNodeCleared();
+    delveRun.TryMoveTo(delveRun.AvailableNodes[0]);
+    delveRunWalkGuard++;
+}
+var delveRunReachesBossPass = delveRun.CurrentNode.Type == MapNodeType.Boss;
+Console.WriteLine($"  [{(delveRunReachesBossPass ? "PASS" : "FAIL")}] Walking AvailableNodes[0] repeatedly reaches the Boss node with no special-casing ({delveRunWalkGuard} moves)");
 
 // ==== ARTIFACTS — first pass at 6 Delve-scoped (run-only) Artifacts ====
 // Twin Flame, Barrier Stone, Vanguard's Bell, and Weaver's Thread are combat-time effects, so
@@ -767,6 +1028,8 @@ Skill MakeFocusingLensAttack() => new()
 AnimaUnit MakeArtifactTestAnima(string id, Skill head, Skill frame, Skill tail) => new()
 {
     Id = id,
+    Name = id,
+    Gen = 1,
     Color = AnimaColor.Crimson,
     BaseStats = new Stats { MaxHp = 100, Defense = 0, Speed = 10, DamageMultiplier = 1.0, SpiritMultiplier = 1.0 },
     Head = head,
@@ -1550,7 +1813,7 @@ void ResolveEmberDrop(AnimaColor emberColor, List<AnimaUnit> team, PersistentLed
 
 void PrintResourceSnapshot(PersistentLedger ledger, RunLedger runLedger)
 {
-    Console.WriteLine($"  Wisp: {ledger.GetBalance(ResourceType.Wisp)} | EchoShard: {ledger.GetBalance(ResourceType.EchoShard)} | VesselShard: {ledger.GetBalance(ResourceType.VesselShard)} | Vessel: {ledger.GetBalance(ResourceType.Vessel)}");
+    Console.WriteLine($"  Wisp: {ledger.GetBalance(ResourceType.Wisp)} | EchoShard: {ledger.GetBalance(ResourceType.EchoShard)} | VesselShard: {ledger.GetBalance(ResourceType.VesselShard)}");
     Console.WriteLine($"  Artifacts owned ({runLedger.Artifacts.Count}/{Anima.Core.Economy.ArtifactService.MaxArtifactsPerDelve}): {(runLedger.Artifacts.Count == 0 ? "none" : string.Join(", ", runLedger.Artifacts.Select(a => a.Name)))}");
 }
 

@@ -72,6 +72,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Ember",
+            Name = "Ember",
+            Gen = 1,
             Color = AnimaColor.Crimson,
             BaseStats = stats,
             Head = slash,
@@ -149,6 +151,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Boulder",
+            Name = "Boulder",
+            Gen = 1,
             Color = AnimaColor.Onyx,
             BaseStats = stats,
             Head = bash,
@@ -230,6 +234,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Bastion",
+            Name = "Bastion",
+            Gen = 1,
             Color = AnimaColor.Onyx,
             BaseStats = stats,
             Head = bash,
@@ -304,6 +310,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Sprout",
+            Name = "Sprout",
+            Gen = 1,
             Color = AnimaColor.Verdant,
             BaseStats = stats,
             Head = smite,
@@ -390,6 +398,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Shade",
+            Name = "Shade",
+            Gen = 1,
             Color = AnimaColor.Azure,
             BaseStats = stats,
             Head = pin,
@@ -473,6 +483,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Reaper",
+            Name = "Reaper",
+            Gen = 1,
             Color = AnimaColor.Crimson,
             BaseStats = stats,
             Head = rend,
@@ -561,6 +573,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Marksman",
+            Name = "Marksman",
+            Gen = 1,
             Color = AnimaColor.Crimson,
             BaseStats = stats,
             Head = snipe,
@@ -639,6 +653,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Aegis",
+            Name = "Aegis",
+            Gen = 1,
             Color = AnimaColor.Onyx,
             BaseStats = stats,
             Head = guardStrike,
@@ -720,6 +736,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Warden",
+            Name = "Warden",
+            Gen = 1,
             Color = AnimaColor.Onyx,
             BaseStats = stats,
             Head = intercept,
@@ -800,6 +818,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Thicket",
+            Name = "Thicket",
+            Gen = 1,
             Color = AnimaColor.Verdant,
             BaseStats = stats,
             Head = renew,
@@ -884,6 +904,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Lotus",
+            Name = "Lotus",
+            Gen = 1,
             Color = AnimaColor.Verdant,
             BaseStats = stats,
             Head = purge,
@@ -964,6 +986,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Anchor",
+            Name = "Anchor",
+            Gen = 1,
             Color = AnimaColor.Azure,
             BaseStats = stats,
             Head = shove,
@@ -1042,6 +1066,8 @@ public static class SampleAnimas
         return new AnimaUnit
         {
             Id = "Veil",
+            Name = "Veil",
+            Gen = 1,
             Color = AnimaColor.Azure,
             BaseStats = stats,
             Head = deflect,

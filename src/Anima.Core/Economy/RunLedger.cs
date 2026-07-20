@@ -10,4 +10,12 @@ namespace Anima.Core.Economy;
 public sealed class RunLedger
 {
     public List<Artifact> Artifacts { get; } = new();
+
+    // Wisp balance snapshot the caller (a future Run layer) takes from PersistentLedger the moment
+    // a Delve begins. DelveEndService diffs the CURRENT balance against this to isolate Wisp earned
+    // DURING this run -- Defeat's 50%-keep and Retreat's 100%-keep penalties apply only to that
+    // delta, never touching whatever was already banked before the Delve started. Defaults to 0,
+    // which is harmless for any caller that never sets it (e.g. existing tests) since a fresh
+    // RunLedger's PersistentLedger is typically also empty at that point.
+    public int WispAtDelveStart { get; set; }
 }
