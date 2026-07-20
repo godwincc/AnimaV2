@@ -14,7 +14,7 @@ A breeding roguelike deckbuilder ("Anima") inspired by Axie Infinity (breeding/p
 
 ## Tech Stack & Architecture
 
-C#/.NET 10 backend, fully built and tested. Planned client: Godot (GDScript). Planned server: ASP.NET Core/SignalR (not started).
+C#/.NET 10 backend, fully built and tested. Planned client: Godot (GDScript). Server: ASP.NET Core/SignalR, first-pass implemented this session — see Server / Accounts / Auth below.
 
 **IMPORTANT:** there is NO real `CombatEventBus`. Every "event" is a direct inline check at a known checkpoint.
 
@@ -28,8 +28,9 @@ AnimaV2.sln
 src/
   Anima.Core/  <- PERMANENT, fully built and tested (Models/Combat/Map/Reforge/Weaving/Economy/Data)
   Anima.ConsoleHarness/  <- THROWAWAY test runner + full Delve simulation (de facto test suite; tests/Anima.Core.Tests does not exist yet)
-  Anima.Server/  <- NOT STARTED
-tests/Anima.Core.Tests/  <- NOT STARTED
+  Anima.Server/  <- first-pass implemented this session (Auth/JWT/SignalR GameHub/DB persistence), see Server / Accounts / Auth below
+tests/
+  Anima.Server.Tests/  <- default `dotnet new` template stub only, no real tests written yet
 ```
 
 ## Map Generation (LOCKED, VALIDATED — 500 seeded maps pass every rule)
@@ -230,10 +231,26 @@ Twin Flame=flame, Wisp Charm=sparkles, Barrier Stone=shield, Vanguard's Bell=cus
 
 **Explicitly out of scope for this pass (by design, not oversight):** no mid-combat state (an active Combat node owns its own state; `DelveRun` just receives the result on resolution), no save/resume across app restarts (matches `SanctumRoster`/`PersistentLedger`'s existing no-save/load caveat), no multiplayer/concurrency handling (single active `DelveRun` at a time).
 
+## Server / Accounts / Auth (NEW — first-pass implemented, uncommitted)
+
+`src/Anima.Server` is a real ASP.NET Core project, not a stub. Built this session:
+- **Auth** — `AuthController`/`AuthService`: register, login, password-reset request/confirm. Deliberately minimal (not full ASP.NET Identity) — `PasswordHasher<T>` reused only for PBKDF2 hashing. `JwtTokenService` issues bearer tokens (180-day lifetime).
+- **DB persistence** — EF Core, now on **Postgres** (Npgsql provider, was SQLite earlier this session and has since been switched — see docker-compose below). `AnimaDbContext` with `AccountEntity`/`PersistedAnimaEntity`/`PersistedLedgerEntryEntity`/`PasswordResetTokenEntity`. `SanctumRosterRepository`/`PersistentLedgerRepository` load/save per-account, `AccountLockRegistry` serializes writes per account.
+- **SignalR** — `GameHub`, JWT-authenticated, including the `access_token` query-string workaround for transports (browser/Godot Web) that can't set a custom header on the handshake. Per-connection `PlayerSession` loads the account's DB-backed roster/ledger on connect.
+- **Local Postgres** — `deployment/docker-compose.yaml` runs a `postgres:16` container (`anima-postgres`, port 5432, db `anima_dev`, user `anima`). `appsettings.json`/`appsettings.Development.json` point at it directly (`Host=localhost;Port=5432;...`) for local dev; no secrets vault yet, matches the JWT signing key's own current "replace before real deploy" placeholder.
+
+**Explicit scope note:** `GameHub` currently proves auth → DB-load → `DelveRun` end-to-end only (`GetRoster`/`GetLedger`/`StartDelve`/`GetDelveStatus`). Weaving/Combat/Shop/Reforge are **not yet ported to hub methods** — that's real follow-up work, not an oversight.
+
+**Known gaps:**
+1. **No test coverage** — `tests/Anima.Server.Tests` is the unmodified `dotnet new` template (one empty `[Fact]`).
+2. **No real email delivery** for password reset — `AuthService.RequestPasswordResetAsync` mints a real, hashed, expiring token but returns it directly in the HTTP response instead of emailing it (no SMTP/mailer wired up anywhere in the solution). Explicit stand-in, must be replaced (e.g. SendGrid/SES) before this is genuinely usable end-to-end; also currently leaks account-existence-by-email, acceptable pre-launch but should be revisited alongside adding real delivery.
+
+**Nothing in `src/Anima.Server`, `tests/Anima.Server.Tests`, `deployment/`, or `.config/` is committed as of this update** — all still working-tree changes.
+
 ## Known TODOs
 1. ~~No Run/traversal-state model exists anywhere~~ — RESOLVED: `DelveRun` implemented, unblocking real data for Defeat/Retreat/Delve-Complete summary screens.
 2. ~~Design Combat/Elite/Boss room BACKGROUND palettes~~ — RESOLVED this session: all 3 implemented and mocked up (see Room-encounter screens above).
-3. Godot client and ASP.NET Core/SignalR server: not started. **Accounts/Auth/Server-persistence is decided as the confirmed next priority (browser-only via Godot Web export, username+password login, email required for password-reset only) — prompt drafted but deliberately not yet sent to CC; was queued behind the Elite mechanic change, which is now resolved (see item 11), so this is unblocked whenever CC is ready to send it.** `SanctumRoster`/`PersistentLedger`/`DelveRun` will need to move from in-memory-only to real per-account database persistence once this starts.
+3. Godot client: not started. **Server (Accounts/Auth/DB persistence): first-pass implemented this session, uncommitted — see Server / Accounts / Auth above.** `SanctumRoster`/`PersistentLedger` now have real per-account Postgres persistence via `Anima.Server`; `DelveRun` remains in-memory-only per connection (by design, see its own section). Remaining server work: port Weaving/Combat/Shop/Reforge onto `GameHub` methods, add real test coverage, wire real email delivery for password reset.
 4. Cross-color hybrid PvE combat value: correctly deprioritized (PvP-relevant, out of scope).
 5. No partial-death/revival concept — a wipe just ends the Delve. Wisp reward amounts are first-pass, need tuning.
 6. Boss's guaranteed-Anima drop is a placeholder economy sink — revisit if a future trading/marketplace system makes Animas abundant (see Boss Reward & Anima Reveal Screen above).
