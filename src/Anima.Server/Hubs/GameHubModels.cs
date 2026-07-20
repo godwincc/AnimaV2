@@ -20,10 +20,9 @@ public record AnimaSummary(
 
 public record LedgerSnapshot(Dictionary<string, int> Balances);
 
-// Discovered mirrors AccountArtifactStatEntity's "row exists" convention; DelvesWonWith is 0 for
-// anything not yet discovered. See AccountArtifactStatEntity's own comment: nothing writes these
-// yet, so every account currently gets Discovered=false/DelvesWonWith=0 across the board -- an
-// honest reflection of real state, not a placeholder bug.
+// Discovered mirrors AccountArtifactStatEntity's "row exists" convention -- real as of this
+// session for anything ever granted by ClaimTreasureNode. DelvesWonWith is still always 0: that
+// write path needs Boss-victory resolution (Phase 5), not wired up yet.
 public record ArtifactSummary(string Name, string Description, bool Discovered, int DelvesWonWith);
 
 public record NodeRef(int FloorIndex, int Column, string? Type);
@@ -31,6 +30,26 @@ public record NodeRef(int FloorIndex, int Column, string? Type);
 public record DelveStatus(NodeRef? CurrentNode, IReadOnlyList<NodeRef> AvailableNodes, int WispEarnedSoFar);
 
 public record StartDelveRequest(string[] TeamAnimaIds);
+
+// ---- Delve traversal / Resource / Treasure ----
+
+// FloorIndex/Column identify the target the same way DelveStatus.AvailableNodes already reports
+// it -- MoveToNode just needs to find that exact node again in DelveRun.AvailableNodes, never a
+// raw MapNode reference across the wire.
+public record MoveToNodeRequest(int FloorIndex, int Column);
+
+// PendingEmberColors is the account's FULL current queue (front-to-back), not just what this
+// call added -- lets the client drive "resolve the next one" in a loop without a separate getter.
+public record CollectResourceResult(int WispGranted, IReadOnlyList<string> PendingEmberColors);
+
+// ArtifactName/Description are null exactly when CapReached is true (the node still gets marked
+// cleared either way -- see ArtifactService's own "intentional punish for a wasted node" comment).
+public record ClaimTreasureResult(string? ArtifactName, string? ArtifactDescription, bool CapReached, IReadOnlyList<string> PendingEmberColors);
+
+// Part is a string for the same reason AnimaPartSummary.Part is -- AugmentType likewise (parsed
+// server-side via Enum.TryParse, with a clear HubException on a bad value rather than a raw
+// FormatException).
+public record AugmentPendingEmberRequest(string AnimaId, string Part, string AugmentType);
 
 // ---- Weaving ----
 

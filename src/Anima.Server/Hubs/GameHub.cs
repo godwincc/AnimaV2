@@ -1,4 +1,5 @@
 using Anima.Core.Data;
+using Anima.Core.Economy;
 using Anima.Core.Enums;
 using Anima.Core.Map;
 using Anima.Core.Models;
@@ -13,17 +14,17 @@ using AnimaUnit = Anima.Core.Models.Anima;
 
 namespace Anima.Server.Hubs;
 
-// Authenticated SignalR entry point -- proves the auth + DB-persistence foundation end to end
-// (connect -> DB-loaded roster/ledger -> in-memory DelveRun tied to this connection) rather than
-// porting the entire game surface (Weaving/Combat/Shop/Reforge/etc.) onto hub methods, which is
-// real follow-up work once this foundation is in place, not part of this pass.
+// Authenticated SignalR entry point. Sanctum/Collection, Weaving, and Resource/Treasure Delve
+// nodes are ported as of this session; Combat/Shop/Reforge/Boss are not yet -- see CLAUDE.md's
+// Server / Accounts / Auth section for the current real method-surface breakdown.
 [Authorize]
 public class GameHub(
     PlayerSessionRegistry sessions,
     SanctumRosterRepository rosterRepo,
     PersistentLedgerRepository ledgerRepo,
     AccountRepository accountRepo,
-    AccountArtifactStatRepository artifactStatsRepo) : Hub
+    AccountArtifactStatRepository artifactStatsRepo,
+    PendingWeaveRepository pendingWeaveRepo) : Hub
 {
     private Guid AccountId =>
         Guid.Parse(Context.User!.FindFirst(JwtTokenService.AccountIdClaimType)!.Value);
@@ -35,7 +36,7 @@ public class GameHub(
 
     public override async Task OnConnectedAsync()
     {
-        await sessions.CreateAsync(Context.ConnectionId, AccountId, Username, rosterRepo, ledgerRepo, accountRepo);
+        await sessions.CreateAsync(Context.ConnectionId, AccountId, Username, rosterRepo, ledgerRepo, accountRepo, pendingWeaveRepo);
         await base.OnConnectedAsync();
     }
 
@@ -87,16 +88,16 @@ public class GameHub(
 
     public Task<LedgerSnapshot> GetLedger()
     {
-        var balances = Enum.GetValues<Core.Economy.ResourceType>()
+        var balances = Enum.GetValues<ResourceType>()
             .ToDictionary(t => t.ToString(), t => Session.Ledger.GetBalance(t));
         return Task.FromResult(new LedgerSnapshot(balances));
     }
 
     // The Collection screen's Artifact list: the full 12-Artifact catalog (SampleArtifacts, the
     // same "the full Artifact roster" source ShopService/the Delve simulation already use) joined
-    // against this account's discovered/won-with stats. See AccountArtifactStatEntity's own
-    // comment -- every account reads all-undiscovered today, since nothing yet writes to that
-    // table (Treasure/Shop pickup and Boss-victory resolution aren't ported onto GameHub yet).
+    // against this account's discovered/won-with stats. Discovered is now real for anything ever
+    // granted by ClaimTreasureNode (see AccountArtifactStatRepository.RecordDiscoveryAsync);
+    // DelvesWonWith is still always 0 -- that write path needs Boss-victory resolution (Phase 5).
     public async Task<IReadOnlyList<ArtifactSummary>> GetArtifactCollection()
     {
         var stats = await artifactStatsRepo.LoadAsync(AccountId);
@@ -187,9 +188,15 @@ public class GameHub(
         {
             ParentAId = parentA.Id,
             ParentBId = parentB.Id,
+            WispCost = result.WispCost,
             Primary = result.Primary!,
             Twin = result.Twin,
         };
+        // Persisted, not just held in-memory on Session: see PendingWeaveEntity's own comment --
+        // a dropped connection between AttemptWeave and ConfirmWeave used to silently lose this
+        // already-paid-for roll entirely (Phase 3 audit finding). Loaded back by
+        // PlayerSessionRegistry.CreateAsync on the next (re)connect.
+        await pendingWeaveRepo.SaveAsync(AccountId, Session.PendingWeave);
 
         return new WeaveRevealSnapshot(
             result.WispCost, result.EchoTriggered,
@@ -227,8 +234,24 @@ public class GameHub(
         if (twin is not null) await rosterRepo.SaveAnimaAsync(AccountId, twin);
 
         Session.PendingWeave = null;
+        await pendingWeaveRepo.DeleteAsync(AccountId);
 
         return new WeaveConfirmResult(ToSummary(primary), twin is null ? null : ToSummary(twin));
+    }
+
+    // Lets a client that just reconnected re-render the Anima Reveal screen for a Weave that was
+    // already resolved (and paid for) before the disconnect -- without this, ConfirmWeave would be
+    // callable but the player would be naming a genome they can no longer see. Null when nothing
+    // is pending.
+    public Task<WeaveRevealSnapshot?> GetPendingWeave()
+    {
+        var pending = Session.PendingWeave;
+        if (pending is null) return Task.FromResult<WeaveRevealSnapshot?>(null);
+
+        return Task.FromResult<WeaveRevealSnapshot?>(new WeaveRevealSnapshot(
+            pending.WispCost, pending.Twin is not null,
+            ToPreview(pending.Primary),
+            pending.Twin is null ? null : ToPreview(pending.Twin)));
     }
 
     // Minimal team-selection: looks the 3 requested Animas up in this account's already-loaded
@@ -254,6 +277,140 @@ public class GameHub(
         if (Session.ActiveDelveRun is null) throw new HubException("No active Delve for this connection.");
         return Task.FromResult(BuildStatus(Session.ActiveDelveRun));
     }
+
+    // The traversal primitive Resource/Treasure (and every future node type) need -- nothing
+    // exposed this before (a Phase 3 audit finding: DelveRun.TryMoveTo existed but no hub method
+    // ever called it). Resolves the client's target against DelveRun.AvailableNodes by
+    // (FloorIndex, Column), the same identity DelveStatus.AvailableNodes already reports, so a raw
+    // MapNode reference never has to cross the wire.
+    public Task<DelveStatus> MoveToNode(MoveToNodeRequest request)
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        var node = run.AvailableNodes.FirstOrDefault(n => n.FloorIndex == request.FloorIndex && n.Column == request.Column)
+            ?? throw new HubException("That node is not currently available to move to.");
+
+        run.TryMoveTo(node);
+
+        return Task.FromResult(BuildStatus(run));
+    }
+
+    // Shared guard for every node-resolution method (Collect/Claim/...): confirms there's a node
+    // to resolve, that it's the expected type, and -- the anti-double-claim check the Phase 3 audit
+    // specifically asked for -- that it hasn't already been cleared. Node-clearing itself
+    // (DelveRun.MarkCurrentNodeCleared) happens INSIDE each resolution method, in the same call
+    // that grants the reward, never left for the client to report separately -- a second Collect/
+    // Claim call on the same node fails here, before anything is granted a second time.
+    private static void RequireUnclearedNode(DelveRun run, MapNodeType expected)
+    {
+        var node = run.CurrentNode ?? throw new HubException("Not currently standing on a node.");
+        if (node.Type != expected) throw new HubException($"Current node is {node.Type?.ToString() ?? "untyped"}, not {expected}.");
+        if (run.ClearedNodes.Contains(node)) throw new HubException("This node has already been cleared.");
+    }
+
+    // Resource's Collect action: +30 Wisp (Wisp Charm-adjusted) plus a 15% chance of 1 bonus Ember,
+    // queued for pickup resolution (see ConvertPendingEmberToWisp/AugmentPendingEmber) same as any
+    // other Ember drop. ArtifactService.OnNodeVisited runs first (Withering Fang/Sapling Charm),
+    // matching every non-combat node's behavior in the existing Delve-simulation reference.
+    public async Task<CollectResourceResult> CollectResourceNode()
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        RequireUnclearedNode(run, MapNodeType.Resource);
+
+        ArtifactService.OnNodeVisited(run.RunLedger, run.Team);
+        foreach (var member in run.Team) await rosterRepo.SaveAnimaAsync(AccountId, member);
+
+        var wispBefore = Session.Ledger.GetBalance(ResourceType.Wisp);
+        var emberDrops = RewardService.GrantResourceNode(Session.Ledger, Random.Shared, run.RunLedger);
+        var wispGranted = Session.Ledger.GetBalance(ResourceType.Wisp) - wispBefore;
+
+        run.MarkCurrentNodeCleared();
+        await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+
+        foreach (var color in emberDrops) Session.PendingEmbers.Enqueue(color);
+
+        return new CollectResourceResult(wispGranted, Session.PendingEmbers.Select(c => c.ToString()).ToList());
+    }
+
+    // Treasure's Claim action: reveals one uniformly-random Artifact from the full 12-Artifact
+    // catalog, skipped/lost if the account is already at the 3-Artifact cap. The node is marked
+    // cleared EITHER WAY (even on a cap-loss) -- per ArtifactService's own "intentional punish for
+    // a wasted node" comment, so a lost-to-cap claim can't just be retried by revisiting. First
+    // real write to AccountArtifactStatEntity's "discovered" column (Phase 1 built the table
+    // read-only) -- the "won a Delve while held" count is untouched here, still needs Boss-victory
+    // resolution (Phase 5).
+    public async Task<ClaimTreasureResult> ClaimTreasureNode()
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        RequireUnclearedNode(run, MapNodeType.Treasure);
+
+        ArtifactService.OnNodeVisited(run.RunLedger, run.Team);
+        foreach (var member in run.Team) await rosterRepo.SaveAnimaAsync(AccountId, member);
+
+        run.MarkCurrentNodeCleared();
+
+        if (!ArtifactService.HasArtifactCapacity(run.RunLedger))
+        {
+            return new ClaimTreasureResult(null, null, true, Session.PendingEmbers.Select(c => c.ToString()).ToList());
+        }
+
+        var artifact = SampleArtifacts.AllFactories[Random.Shared.Next(SampleArtifacts.AllFactories.Count)]();
+        var droppedEmber = ArtifactService.Grant(run.RunLedger, artifact, Session.Ledger, Random.Shared);
+
+        await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+        await artifactStatsRepo.RecordDiscoveryAsync(AccountId, artifact.Name);
+
+        if (droppedEmber is { } color) Session.PendingEmbers.Enqueue(color);
+
+        return new ClaimTreasureResult(artifact.Name, artifact.Description, false, Session.PendingEmbers.Select(c => c.ToString()).ToList());
+    }
+
+    // Ember pickup-choice flow, option 1 of 2: "Convert to Wisp." Resolves the FRONT of the
+    // pending queue only (see PlayerSession.PendingEmbers's own comment for why it's a queue, not
+    // a single slot) -- CLAUDE.md's locked spec: "sequential if multiple dropped, never batched."
+    public async Task<IReadOnlyList<string>> ConvertPendingEmberToWisp()
+    {
+        if (Session.PendingEmbers.Count == 0) throw new HubException("No pending Ember to resolve.");
+
+        Session.PendingEmbers.Dequeue();
+        EmberService.ConvertToWisp(Session.Ledger);
+        await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+
+        return Session.PendingEmbers.Select(c => c.ToString()).ToList();
+    }
+
+    // Ember pickup-choice flow, option 2 of 2: "Augment now." Spends the FRONT of the pending
+    // queue's Ember on one skill; AugmentService itself checks the skill's color actually matches
+    // that Ember's color (among everything else it validates) before committing anything.
+    public async Task<IReadOnlyList<string>> AugmentPendingEmber(AugmentPendingEmberRequest request)
+    {
+        if (Session.PendingEmbers.Count == 0) throw new HubException("No pending Ember to resolve.");
+        var emberColor = Session.PendingEmbers.Peek();
+
+        var anima = Session.Roster.FindById(request.AnimaId) ?? throw new HubException($"Anima {request.AnimaId} not found in this account's roster.");
+        var skill = GetSkillForPart(anima, request.Part);
+
+        if (!Enum.TryParse<AugmentType>(request.AugmentType, out var augmentType))
+            throw new HubException($"Unknown augment type '{request.AugmentType}'.");
+
+        var result = AugmentService.TryApplyAugment(skill, augmentType, emberColor, Session.Ledger, Session.ActiveDelveRun?.RunLedger);
+        if (!result.Success)
+            throw new HubException($"Augment rejected: {result.RejectionReason}.");
+
+        Session.PendingEmbers.Dequeue();
+        await rosterRepo.SaveAnimaAsync(AccountId, anima);
+        await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+
+        return Session.PendingEmbers.Select(c => c.ToString()).ToList();
+    }
+
+    private static Skill GetSkillForPart(AnimaUnit a, string part) => part switch
+    {
+        nameof(Part.Head) => a.Head,
+        nameof(Part.Frame) => a.Frame,
+        nameof(Part.Tail) => a.Tail,
+        nameof(Part.Crest) => a.Crest,
+        _ => throw new HubException($"Unknown part '{part}'."),
+    };
 
     private static DelveStatus BuildStatus(DelveRun run)
     {

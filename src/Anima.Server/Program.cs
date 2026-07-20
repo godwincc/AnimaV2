@@ -30,6 +30,7 @@ builder.Services.AddScoped<SanctumRosterRepository>();
 builder.Services.AddScoped<PersistentLedgerRepository>();
 builder.Services.AddScoped<AccountRepository>();
 builder.Services.AddScoped<AccountArtifactStatRepository>();
+builder.Services.AddScoped<PendingWeaveRepository>();
 builder.Services.AddSingleton<PlayerSessionRegistry>();
 
 builder.Services.AddSignalR();

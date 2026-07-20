@@ -12,6 +12,7 @@ public sealed class PendingWeave
 {
     public required string ParentAId { get; init; }
     public required string ParentBId { get; init; }
+    public required int WispCost { get; init; }
     public required WeavingResult Primary { get; init; }
     public WeavingResult? Twin { get; init; }
 }

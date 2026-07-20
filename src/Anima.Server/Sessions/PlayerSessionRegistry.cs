@@ -27,11 +27,13 @@ public sealed class PlayerSessionRegistry
         SanctumRosterRepository rosterRepo,
         PersistentLedgerRepository ledgerRepo,
         AccountRepository accountRepo,
+        PendingWeaveRepository pendingWeaveRepo,
         CancellationToken ct = default)
     {
         var roster = await rosterRepo.LoadAsync(accountId, ct);
         var ledger = await ledgerRepo.LoadAsync(accountId, ct);
         var team = await accountRepo.LoadTeamAsync(accountId, ct);
+        var pendingWeave = await pendingWeaveRepo.LoadAsync(accountId, ct);
 
         var session = new PlayerSession
         {
@@ -40,6 +42,7 @@ public sealed class PlayerSessionRegistry
             Roster = roster,
             Ledger = ledger,
             TeamAnimaIds = team.ToList(),
+            PendingWeave = pendingWeave,
         };
 
         _sessions[connectionId] = session;

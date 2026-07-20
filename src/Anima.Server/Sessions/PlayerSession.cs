@@ -1,4 +1,5 @@
 using Anima.Core.Economy;
+using Anima.Core.Enums;
 using Anima.Core.Models;
 using Anima.Core.Run;
 
@@ -30,11 +31,21 @@ public sealed class PlayerSession
     // TeamAnimaIdsJson at session creation and kept in sync with the DB by GameHub.SetTeam.
     public List<string> TeamAnimaIds { get; set; } = new();
 
-    // Deliberately in-memory only, tied to this session/connection -- same "no resume" caveat as
-    // ActiveDelveRun above. A pending Weave that's dropped by a disconnect before it's confirmed
-    // loses its naming opportunity, but NOT its already-spent Wisp/WeaveCount charge (that already
-    // wrote through to the DB in AttemptWeave) -- see PendingWeave's own comment.
+    // DB-backed (see PendingWeaveEntity/PendingWeaveRepository) -- a Phase 3 audit found this was
+    // originally in-memory-only, meaning a dropped connection between AttemptWeave and ConfirmWeave
+    // silently lost an already-paid-for Weave (Wisp/Echo Shard/WeaveCount spent, nothing to show
+    // for it) and reset the guard, letting the player start and orphan another one. Now reloaded by
+    // PlayerSessionRegistry.CreateAsync on every (re)connect, so ConfirmWeave stays resumable.
     public PendingWeave? PendingWeave { get; set; }
+
+    // Deliberately in-memory only, tied to this session/connection -- NOT the same fix as
+    // PendingWeave above. An Ember is a momentary pickup with no stored value anywhere by design
+    // (see EmberService's own comment: "nothing... ever stores an Ember anywhere"), so losing an
+    // unresolved one to a dropped connection costs at most one Augment/15 Wisp -- far below
+    // PendingWeave's stakes (a whole materialized Vessel + a capped, precious WeaveCount charge).
+    // A real queue (not a single slot), per CLAUDE.md's locked pickup-flow spec: "sequential if
+    // multiple dropped -- never batched" (relevant once Elite/Combat can drop up to 3 at once).
+    public Queue<AnimaColor> PendingEmbers { get; } = new();
 
     // Deliberately in-memory only, tied to this session/connection -- explicit scope decision (see
     // CLAUDE.md's new-scope note: "no resume, no save/load of in-progress run state"). Discarded

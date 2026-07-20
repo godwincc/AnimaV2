@@ -10,6 +10,7 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
     public DbSet<PersistedLedgerEntryEntity> LedgerEntries => Set<PersistedLedgerEntryEntity>();
     public DbSet<PasswordResetTokenEntity> PasswordResetTokens => Set<PasswordResetTokenEntity>();
     public DbSet<AccountArtifactStatEntity> ArtifactStats => Set<AccountArtifactStatEntity>();
+    public DbSet<PendingWeaveEntity> PendingWeaves => Set<PendingWeaveEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -40,6 +41,12 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
         {
             e.HasIndex(s => new { s.AccountId, s.ArtifactName }).IsUnique();
             e.Property(s => s.Version).IsConcurrencyToken();
+        });
+
+        modelBuilder.Entity<PendingWeaveEntity>(e =>
+        {
+            e.HasIndex(w => w.AccountId).IsUnique();
+            e.Property(w => w.Version).IsConcurrencyToken();
         });
     }
 
