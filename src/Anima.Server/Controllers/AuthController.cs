@@ -30,10 +30,12 @@ public class AuthController(AuthService authService, JwtTokenService tokenServic
     }
 
     [HttpPost("password-reset/request")]
-    public async Task<ActionResult<RequestPasswordResetResponse>> RequestPasswordReset(RequestPasswordResetRequest request, CancellationToken ct)
+    public async Task<IActionResult> RequestPasswordReset(RequestPasswordResetRequest request, CancellationToken ct)
     {
-        var result = await authService.RequestPasswordResetAsync(request.Email, ct);
-        return Ok(result);
+        // Response is identical whether or not the email matches an account -- deliberately
+        // discards authService's return value so there is no account-existence signal here.
+        await authService.RequestPasswordResetAsync(request.Email, ct);
+        return Ok(new { message = "If that email is registered, a password reset link has been sent." });
     }
 
     [HttpPost("password-reset/confirm")]

@@ -1,3 +1,11 @@
+# Reads credentials from a .env file in this same directory (see .env.example) --
+# docker compose loads .env automatically, no --env-file flag needed.
+#
+# NOTE: only Postgres is containerized here today. Anima.Server itself has no Dockerfile/service
+# entry yet and is run directly via `dotnet run` against this container (see
+# src/Anima.Server/README-dev-secrets.md). When Anima.Server does get a service block, it should
+# receive ConnectionStrings__Default and Jwt__SigningKey the same way -- as env vars sourced from
+# this .env file (or compose secrets), never hardcoded in this file.
 version: "3.8"
 services:
   postgres:
@@ -5,9 +13,9 @@ services:
     container_name: anima-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: anima
-      POSTGRES_PASSWORD: anima_dev_password
-      POSTGRES_DB: anima_dev
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:

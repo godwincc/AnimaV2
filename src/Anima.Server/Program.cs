@@ -2,6 +2,7 @@ using System.Text;
 using Anima.Server.Auth;
 using Anima.Server.Data;
 using Anima.Server.Data.Entities;
+using Anima.Server.Email;
 using Anima.Server.Hubs;
 using Anima.Server.Persistence;
 using Anima.Server.Sessions;
@@ -22,6 +23,7 @@ builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptio
 builder.Services.AddSingleton<PasswordHasher<AccountEntity>>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddSingleton<JwtTokenService>();
+builder.Services.AddSingleton<IEmailSender, LogEmailSender>();
 
 builder.Services.AddSingleton<AccountLockRegistry>();
 builder.Services.AddScoped<SanctumRosterRepository>();
@@ -32,6 +34,15 @@ builder.Services.AddSignalR();
 
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
     ?? throw new InvalidOperationException("Jwt configuration section is missing.");
+
+// ConfigurationBinder does NOT enforce JwtOptions.SigningKey's `required` modifier when only that
+// one member is absent (Issuer/Audience/LifetimeDays are enough for Get<JwtOptions>() above to
+// succeed) -- it silently binds to null, which otherwise wouldn't fail until the first HTTP
+// request hits the JWT bearer handler's lazily-created options, as an opaque ArgumentNullException
+// deep in SymmetricSecurityKey construction. Checked explicitly here so a missing signing key fails
+// fast at startup with the same clear-error style as the ConnectionStrings:Default check above.
+if (string.IsNullOrWhiteSpace(jwtOptions.SigningKey))
+    throw new InvalidOperationException("Jwt:SigningKey is missing. Set it via `dotnet user-secrets` for local dev or the Jwt__SigningKey env var for deployment -- see src/Anima.Server/README-dev-secrets.md.");
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>

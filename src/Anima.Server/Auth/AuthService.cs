@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Anima.Server.Data;
 using Anima.Server.Data.Entities;
+using Anima.Server.Email;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -20,7 +21,7 @@ public record ResetPasswordResult(ResetPasswordOutcome Outcome);
 // a password-reset path keyed off email, and a long-lived login token. PasswordHasher<T> is reused
 // from Microsoft.Extensions.Identity.Core purely for its hashing algorithm (PBKDF2, correctly
 // salted/iterated) -- pulling in the rest of Identity's machinery for that alone isn't warranted.
-public class AuthService(AnimaDbContext db, PasswordHasher<AccountEntity> hasher)
+public class AuthService(AnimaDbContext db, PasswordHasher<AccountEntity> hasher, IEmailSender emailSender)
 {
     private static string Normalize(string username) => username.Trim().ToUpperInvariant();
 
@@ -68,18 +69,16 @@ public class AuthService(AnimaDbContext db, PasswordHasher<AccountEntity> hasher
         return new LoginResult(LoginOutcome.Ok, account);
     }
 
-    // Real email DELIVERY is out of scope for this pass -- there is no SMTP/mailer wired up
-    // anywhere in this solution. This mints and stores a real, single-use, expiring, hashed token
-    // exactly as a real flow would, but hands the raw token straight back to the HTTP caller instead
-    // of emailing it, which is a stand-in that must be replaced (e.g. with SendGrid/SES) before this
-    // is genuinely usable end-to-end. Also note: returning AccountFound at all (and a token only
-    // when true) leaks account existence by email -- acceptable for a pre-launch build per the
-    // user's own "keep it simple" framing, but should be revisited (always return the same generic
-    // response) once a real mailer removes the need to hand the token back directly.
-    public async Task<RequestPasswordResetResponse> RequestPasswordResetAsync(string email, CancellationToken ct = default)
+    // Real email DELIVERY is out of scope for this pass -- IEmailSender's only implementation
+    // (LogEmailSender) just logs what a real mailer would have sent. But the token itself now
+    // only ever reaches that seam, never the HTTP response, and the response is identical whether
+    // or not the email matches an account -- both the token-in-response and the found/not-found
+    // response difference were real vulnerabilities (arbitrary reset-token harvesting, and account
+    // enumeration by email) in the prior version of this method.
+    public async Task RequestPasswordResetAsync(string email, CancellationToken ct = default)
     {
         var account = await db.Accounts.SingleOrDefaultAsync(a => a.Email == email.Trim(), ct);
-        if (account is null) return new RequestPasswordResetResponse(false, null, null);
+        if (account is null) return;
 
         var rawToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var expires = DateTime.UtcNow.AddHours(1);
@@ -93,7 +92,7 @@ public class AuthService(AnimaDbContext db, PasswordHasher<AccountEntity> hasher
         });
         await db.SaveChangesAsync(ct);
 
-        return new RequestPasswordResetResponse(true, rawToken, expires);
+        await emailSender.SendPasswordResetEmailAsync(account.Email, rawToken, expires, ct);
     }
 
     public async Task<ResetPasswordResult> ResetPasswordAsync(string rawToken, string newPassword, CancellationToken ct = default)
