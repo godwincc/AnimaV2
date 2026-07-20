@@ -61,7 +61,10 @@ public static class WeavingService
             Crest = new PartGenome(crest.Dominant, crest.R1, crest.R2),
         };
 
-        return new WeavingResult(genome, ColorStats[color], hybridColor is not null, [head, frame, tail, crest]);
+        // Name is explicitly null here (not just relying on WeavingResult's default) -- every
+        // Vessel this produces, whether AttemptWeave's Primary or its Echo Twin (both call this
+        // same method), starts unnamed until the future naming-prompt UI sets it.
+        return new WeavingResult(genome, ColorStats[color], hybridColor is not null, [head, frame, tail, crest], Name: null);
     }
 
     // Full attempt orchestration: eligibility (lineage + WeaveCount), then affordability (Wisp,

@@ -13,12 +13,21 @@ using Anima.Core.Models;
 // final balance pass, but the mechanics are locked.
 public static class SampleArtifacts
 {
+    // All 11 factories, one call each -- shared by anything that needs "the full Artifact roster"
+    // (ShopService's Wares-Artifact roll, the Delve simulation's Treasure cycle), same pattern as
+    // PrimitiveRoster.All for Animas. Order is arbitrary, not a drop-rate weighting.
+    public static IReadOnlyList<Func<Artifact>> AllFactories { get; } =
+    [
+        CreateTwinFlame, CreateWispCharm, CreateBarrierStone, CreateVanguardsBell, CreateWeaversThread,
+        CreateMarkedCoin, CreateWitheringFang, CreateFocusingLens, CreateSilentChime, CreateEmberCore,
+        CreateSaplingCharm,
+    ];
+
     // REDEFINED from an earlier hook-validation placeholder (which only proved OnCombatStart
     // actually fires -- Vanguard's Bell now demonstrates that instead) to its real design-doc
     // effect: Shop prices are discounted for as long as this is owned. Checked directly by name
-    // via ArtifactService.ApplyEmberCoreDiscount, wired into ReforgeService.Accept today --
-    // Augment costs have no pricing system to discount yet (flagged, not invented; see
-    // ArtifactService's own comment).
+    // via ArtifactService.ApplyEmberCoreDiscount, wired into ReforgeService.Accept,
+    // AugmentService.TryApplyAugment's Wisp tier, and EmberService.TryBuyEmber (Wares).
     public static Artifact CreateEmberCore()
     {
         return new Artifact
@@ -133,6 +142,18 @@ public static class SampleArtifacts
         {
             Name = "Silent Chime",
             Description = "Single-use per Delve. When activated, grants one chosen Anima an immediate extra action right after their current action resolves, within the same Round.",
+        };
+    }
+
+    // Checked directly via ArtifactService.OnNodeVisited, the same "any node visit" checkpoint
+    // Withering Fang uses -- see that method's own comment for why living-only (no revive) was
+    // chosen for "heals the whole team."
+    public static Artifact CreateSaplingCharm()
+    {
+        return new Artifact
+        {
+            Name = "Sapling Charm",
+            Description = "Whenever the player enters any node, the whole team heals 10% of their max HP.",
         };
     }
 }

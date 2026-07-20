@@ -27,6 +27,13 @@ public class Skill
     public int OnHitStatusMagnitude { get; set; }
     public DurationType OnHitStatusDuration { get; set; } = DurationType.Instant;
     public int? OnHitStatusDurationTurns { get; set; }
+
+    // Extend Augment: adds this many extra Charges (see StatusEffectInstance.Charges) to the
+    // UntilConsumed on-hit debuff above, whenever it's applied. Only meaningful when
+    // OnHitStatusKeyword is set and OnHitStatusDuration is UntilConsumed -- AugmentService rejects
+    // Extend on any skill where that isn't true, so this stays 0 everywhere else.
+    public int OnHitStatusExtraCharges { get; set; }
+
     public TargetType? SecondaryTarget { get; set; } // e.g. Smite healing LowestHpAlly alongside its Enemy attack target
     public double? SelfHealPercentOfDamage { get; set; } // e.g. Leech Mother's Draining Claw
     public double? SelfShieldPercentOfDamage { get; set; } // e.g. Guard Strike: Shield equal to damage dealt
@@ -74,10 +81,24 @@ public class Skill
     // next open position, instead of the summon just filling the first open slot behind them.
     public bool SummonInFront { get; set; }
 
-    // Shallow copy is enough: every mutable field is a scalar (Augments mutate BaseDamage/
-    // EnergyCost in place), and the reference-type fields (override arrays, summon delegates)
-    // are never mutated after construction, only replaced wholesale. Needed by Reforge so a
-    // rolled part handed to one Anima is an independent instance, not shared with every other
-    // Anima that rolls the same part from the pool.
-    public Skill Clone() => (Skill)MemberwiseClone();
+    // AugmentService's own record of what's been applied to THIS skill instance -- Count enforces
+    // the 3-per-part cap and indexes the 2/4/7 cost curve. Unlike every other mutable field on this
+    // class (all scalars), this one IS a reference type that gets mutated after construction (via
+    // .Add() in AugmentService), so Clone() below needs a real deep copy of it specifically, not
+    // the shallow MemberwiseClone every other field relies on.
+    public List<AugmentType> AppliedAugments { get; set; } = new();
+
+    // Shallow copy is enough for every other field: every other mutable field is a scalar
+    // (Augments mutate BaseDamage/EnergyCost in place), and the reference-type fields (override
+    // arrays, summon delegates) are never mutated after construction, only replaced wholesale.
+    // AppliedAugments is the one exception (see its own comment) and needs an explicit deep copy
+    // here, or two Animas that rolled the same pooled skill would silently share one Augment
+    // count/list. Needed by Reforge so a rolled part handed to one Anima is an independent
+    // instance, not shared with every other Anima that rolls the same part from the pool.
+    public Skill Clone()
+    {
+        var clone = (Skill)MemberwiseClone();
+        clone.AppliedAugments = new List<AugmentType>(AppliedAugments);
+        return clone;
+    }
 }

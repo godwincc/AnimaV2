@@ -62,3 +62,12 @@ public enum TriggerType
     PassiveConditional,
     PassiveEvent
 }
+
+// The 4 locked Augment types (see Anima.Core.Economy.AugmentService for eligibility/effect rules).
+public enum AugmentType
+{
+    IncreaseEffect,
+    AoEDamage,
+    DecreaseCost,
+    Extend
+}

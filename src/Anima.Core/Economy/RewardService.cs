@@ -10,6 +10,12 @@ namespace Anima.Core.Economy;
 // loosely against Weaving's 50-400 cost curve and Reforge's 40/80 cost so a single node's payout
 // roughly funds a cheap early action -- the ORDER (Resource < Combat < Elite < Boss) is locked per
 // CLAUDE.md's reward tier ladder, the exact numbers are not and can be tuned freely.
+//
+// Ember is momentary, not a ledger balance (see ResourceType's own comment) -- every method that
+// can drop Ember returns the dropped color(s) instead of writing them anywhere. The caller (a
+// future Run layer) is responsible for resolving each dropped Ember individually and sequentially
+// through EmberService (Augment now vs. convert to Wisp) before the reward screen closes, per the
+// pickup-flow spec. Wisp itself is still granted straight into the ledger here, same as before.
 public static class RewardService
 {
     public const int ResourceNodeWisp = 30;
@@ -17,8 +23,14 @@ public static class RewardService
     public const int EliteWinWisp = 120;
     public const int BossWinWisp = 300;
 
-    public const int CombatWinEmberCount = 2;
-    public const int EliteWinEmberCount = 3;
+    // Elite's 2nd/3rd Ember slots -- each rolled independently at this chance, on top of the 1
+    // guaranteed drop, capping Elite at 3 Ember total. Not specified beyond "25% chance each for a
+    // 2nd and 3rd" -- that's the locked number, not a judgment call.
+    public const double EliteBonusEmberChance = 0.25;
+
+    // Resource's new bonus-Ember roll, additive to its existing flat 30 Wisp (which is otherwise
+    // unchanged). Locked number from the spec, not a judgment call.
+    public const double ResourceBonusEmberChance = 0.15;
 
     // Elite's shard-fragment chance. Not specified anywhere, so picked deliberately: 25% echoes
     // Ember's own per-color drop granularity (a quarter chance) while staying clearly below the
@@ -30,15 +42,9 @@ public static class RewardService
     private static readonly AnimaColor[] EmberColors =
         [AnimaColor.Crimson, AnimaColor.Onyx, AnimaColor.Verdant, AnimaColor.Azure];
 
-    public static ResourceType EmberFor(AnimaColor color) => color switch
-    {
-        AnimaColor.Crimson => ResourceType.EmberCrimson,
-        AnimaColor.Onyx => ResourceType.EmberOnyx,
-        AnimaColor.Verdant => ResourceType.EmberVerdant,
-        AnimaColor.Azure => ResourceType.EmberAzure,
-        _ => throw new ArgumentOutOfRangeException(nameof(color), color,
-            "Ember only comes in the 4 base colors -- Vulcan/Mirage are hybrid-only outcomes, never a directly rollable base color."),
-    };
+    // Vulcan/Mirage never drop their own Ember since they're hybrid-only outcomes, never a directly
+    // rollable base color -- every Ember roll picks uniformly among the 4 base colors only.
+    private static AnimaColor RollEmberColor(Random rng) => EmberColors[rng.Next(EmberColors.Length)];
 
     // Wisp Charm's flat multiplier -- applied to every Wisp grant below whenever it's owned.
     private const double WispCharmMultiplier = 1.2;
@@ -46,26 +52,39 @@ public static class RewardService
     // runLedger is optional so every pre-existing call site (none of which know about Artifacts)
     // still compiles unchanged and behaves exactly as before -- omitting it just means no
     // Artifact-driven bonus applies.
-    public static void GrantCombatWin(PersistentLedger ledger, Random rng, RunLedger? runLedger = null)
+    //
+    // Combat: 1 Ember, random color, guaranteed.
+    public static List<AnimaColor> GrantCombatWin(PersistentLedger ledger, Random rng, RunLedger? runLedger = null)
     {
         ledger.Add(ResourceType.Wisp, ApplyWispCharm(CombatWinWisp, runLedger));
-        GrantRandomColorEmber(ledger, CombatWinEmberCount, rng);
+        return [RollEmberColor(rng)];
     }
 
-    public static void GrantEliteWin(PersistentLedger ledger, Random rng, RunLedger? runLedger = null)
+    // Elite: 1 Ember guaranteed + an independent EliteBonusEmberChance roll for each of a 2nd and
+    // 3rd (max 3 total), each still an independent random color.
+    public static List<AnimaColor> GrantEliteWin(PersistentLedger ledger, Random rng, RunLedger? runLedger = null)
     {
         ledger.Add(ResourceType.Wisp, ApplyWispCharm(EliteWinWisp, runLedger));
-        GrantRandomColorEmber(ledger, EliteWinEmberCount, rng);
+
+        var embers = new List<AnimaColor> { RollEmberColor(rng) };
+        if (rng.NextDouble() < EliteBonusEmberChance) embers.Add(RollEmberColor(rng));
+        if (rng.NextDouble() < EliteBonusEmberChance) embers.Add(RollEmberColor(rng));
 
         if (rng.NextDouble() < EliteShardChance)
         {
             ledger.Add(RollShardType(rng), 1);
         }
+
+        return embers;
     }
 
-    public static void GrantResourceNode(PersistentLedger ledger, RunLedger? runLedger = null)
+    // Resource: unchanged 30 Wisp, no Ember by default -- plus a new ResourceBonusEmberChance
+    // chance of exactly 1 bonus Ember. rng is now required (Resource previously took none) since
+    // this roll needs one.
+    public static List<AnimaColor> GrantResourceNode(PersistentLedger ledger, Random rng, RunLedger? runLedger = null)
     {
         ledger.Add(ResourceType.Wisp, ApplyWispCharm(ResourceNodeWisp, runLedger));
+        return rng.NextDouble() < ResourceBonusEmberChance ? [RollEmberColor(rng)] : [];
     }
 
     // Boss grants a guaranteed shard fragment too, but only ONE of the two types (50/50, not
@@ -74,7 +93,7 @@ public static class RewardService
     // keeps the two node types' reward shape consistent, and avoids a single Boss clear handing
     // out full progress toward BOTH Shard economies at once (EchoShardCost is 5 -- a guaranteed
     // double-drop would blow past the intended multi-Delve pacing for whichever type never gets
-    // spent). Flag to the user if "both" was actually intended.
+    // spent). Flag to the user if "both" was actually intended. No Ember involved at all.
     public static void GrantBossWin(PersistentLedger ledger, Random rng, RunLedger? runLedger = null)
     {
         ledger.Add(ResourceType.Wisp, ApplyWispCharm(BossWinWisp, runLedger));
@@ -91,15 +110,6 @@ public static class RewardService
     private static ResourceType RollShardType(Random rng) =>
         rng.NextDouble() < 0.5 ? ResourceType.EchoShard : ResourceType.VesselShard;
 
-    private static void GrantRandomColorEmber(PersistentLedger ledger, int count, Random rng)
-    {
-        for (var i = 0; i < count; i++)
-        {
-            var color = EmberColors[rng.Next(EmberColors.Length)];
-            ledger.Add(EmberFor(color), 1);
-        }
-    }
-
     // Marked Coin's on-pickup bonus roll. Not specified anywhere, so weighted deliberately toward
     // the common resources (Wisp/Ember) and away from the two Shard types -- a single (possibly
     // early/cheap) pickup shouldn't meaningfully shortcut the Shard scarcity the rest of the
@@ -107,15 +117,20 @@ public static class RewardService
     // one). Flag to the user if a different pool/weighting was actually intended.
     public const int MarkedCoinWispBonus = 40;
 
-    private static readonly (Action<PersistentLedger, Random> Grant, double Weight)[] MarkedCoinPool =
+    // Each pool entry returns the dropped Ember color, if the branch it hit was Ember -- null for
+    // every other branch, since those grant straight into the ledger like before. Matches
+    // Artifact.OnPickup's own Func<PersistentLedger, Random, AnimaColor?> shape so ArtifactService.
+    // Grant can pass a Marked-Coin-dropped Ember straight into the same pickup-choice flow as a
+    // node-dropped one.
+    private static readonly (Func<PersistentLedger, Random, AnimaColor?> Grant, double Weight)[] MarkedCoinPool =
     [
-        ((ledger, _) => ledger.Add(ResourceType.Wisp, MarkedCoinWispBonus), 0.50),
-        ((ledger, rng) => GrantRandomColorEmber(ledger, 1, rng), 0.35),
-        ((ledger, _) => ledger.Add(ResourceType.EchoShard, 1), 0.075),
-        ((ledger, _) => ledger.Add(ResourceType.VesselShard, 1), 0.075),
+        ((ledger, _) => { ledger.Add(ResourceType.Wisp, MarkedCoinWispBonus); return null; }, 0.50),
+        ((_, rng) => RollEmberColor(rng), 0.35),
+        ((ledger, _) => { ledger.Add(ResourceType.EchoShard, 1); return null; }, 0.075),
+        ((ledger, _) => { ledger.Add(ResourceType.VesselShard, 1); return null; }, 0.075),
     ];
 
-    public static void GrantMarkedCoinBonus(PersistentLedger ledger, Random rng)
+    public static AnimaColor? GrantMarkedCoinBonus(PersistentLedger ledger, Random rng)
     {
         var roll = rng.NextDouble();
         var cumulative = 0.0;
@@ -124,11 +139,10 @@ public static class RewardService
             cumulative += weight;
             if (roll < cumulative)
             {
-                grant(ledger, rng);
-                return;
+                return grant(ledger, rng);
             }
         }
 
-        MarkedCoinPool[^1].Grant(ledger, rng); // floating-point safety net -- unreachable in practice, weights sum to 1.0
+        return MarkedCoinPool[^1].Grant(ledger, rng); // floating-point safety net -- unreachable in practice, weights sum to 1.0
     }
 }

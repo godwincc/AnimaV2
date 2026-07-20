@@ -411,9 +411,12 @@ public class CombatEngine
         var weak = GetStatus(actor, "Weak");
         if (weak == null) return 0;
 
-        actor.ActiveStatuses.Remove(weak);
-        Log($"  {actor.DisplayName}'s Weak is consumed.");
-        return weak.Magnitude;
+        var magnitude = weak.Magnitude;
+        ReduceStatusCharge(actor, weak);
+        Log(weak.Charges > 0
+            ? $"  {actor.DisplayName}'s Weak is consumed ({weak.Charges} charge(s) remaining -- extended by Augment)."
+            : $"  {actor.DisplayName}'s Weak is consumed.");
+        return magnitude;
     }
 
     private bool ConsumeFrenzy(ICombatant actor)
@@ -580,7 +583,7 @@ public class CombatEngine
 
         if (skill.OnHitStatusKeyword != null)
         {
-            ApplyOnHitStatus(target, skill.OnHitStatusKeyword, skill.OnHitStatusMagnitude, skill.OnHitStatusDuration, skill.OnHitStatusDurationTurns ?? 0);
+            ApplyOnHitStatus(target, skill.OnHitStatusKeyword, skill.OnHitStatusMagnitude, skill.OnHitStatusDuration, skill.OnHitStatusDurationTurns ?? 0, skill.OnHitStatusExtraCharges);
         }
 
         if (skill.RemovesBuff)
@@ -700,8 +703,10 @@ public class CombatEngine
         if (exposed != null && remaining > 0)
         {
             remaining = (int)Math.Round(remaining * ExposedMultiplier);
-            target.ActiveStatuses.Remove(exposed);
-            Log($"  {target.DisplayName} is Exposed: incoming damage x{ExposedMultiplier:0.##}.");
+            ReduceStatusCharge(target, exposed);
+            Log(exposed.Charges > 0
+                ? $"  {target.DisplayName} is Exposed: incoming damage x{ExposedMultiplier:0.##} ({exposed.Charges} charge(s) remaining -- extended by Augment)."
+                : $"  {target.DisplayName} is Exposed: incoming damage x{ExposedMultiplier:0.##}.");
         }
 
         // Courage: a percentage reduction on the target's own side, applied before Defense's
@@ -1287,7 +1292,7 @@ public class CombatEngine
     // existing instance's remaining duration instead of stacking a second simultaneous DOT --
     // same "don't duplicate" idea as Shield's magnitude-stacking, just applied to duration.
     // Every other on-hit status is a fresh, independent application.
-    private void ApplyOnHitStatus(ICombatant target, string keyword, int magnitude, DurationType duration, int durationTurns)
+    private void ApplyOnHitStatus(ICombatant target, string keyword, int magnitude, DurationType duration, int durationTurns, int extraCharges = 0)
     {
         if (keyword == "Bleed")
         {
@@ -1304,11 +1309,16 @@ public class CombatEngine
             return;
         }
 
-        ApplyStatus(target, keyword, magnitude, duration, durationTurns);
-        Log($"  {target.DisplayName} is afflicted with {keyword} ({magnitude}%).");
+        // Extend Augment: extraCharges is only ever nonzero for a genuinely UntilConsumed keyword
+        // (AugmentService rejects Extend otherwise), so a FixedTurn status like Bleed above never
+        // reaches this line with a nonzero value to begin with.
+        ApplyStatus(target, keyword, magnitude, duration, durationTurns, 1 + extraCharges);
+        Log(extraCharges > 0
+            ? $"  {target.DisplayName} is afflicted with {keyword} ({magnitude}%, {1 + extraCharges} charges -- extended by Augment)."
+            : $"  {target.DisplayName} is afflicted with {keyword} ({magnitude}%).");
     }
 
-    private static void ApplyStatus(ICombatant target, string keyword, int magnitude, DurationType duration, int durationTurns)
+    private static void ApplyStatus(ICombatant target, string keyword, int magnitude, DurationType duration, int durationTurns, int charges = 1)
     {
         target.ActiveStatuses.Add(new StatusEffectInstance
         {
@@ -1316,11 +1326,22 @@ public class CombatEngine
             Magnitude = magnitude,
             Duration = duration,
             RemainingTurns = durationTurns,
+            Charges = charges,
         });
     }
 
     private static StatusEffectInstance? GetStatus(ICombatant combatant, string keyword) =>
         combatant.ActiveStatuses.FirstOrDefault(s => s.Keyword == keyword);
+
+    // Extend Augment: an UntilConsumed status survives being consumed this many extra times
+    // before it's actually removed, instead of vanishing the moment it's first used. Shared by
+    // every UntilConsumed consumption point that Extend can target (currently Weak and Exposed --
+    // see their own call sites) so charge bookkeeping lives in exactly one place.
+    private static void ReduceStatusCharge(ICombatant combatant, StatusEffectInstance status)
+    {
+        status.Charges--;
+        if (status.Charges <= 0) combatant.ActiveStatuses.Remove(status);
+    }
 
     private static ICombatant? SelectTarget(TargetType targetType, List<ICombatant> team)
     {

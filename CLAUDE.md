@@ -4,107 +4,59 @@ This file is auto-read by Claude Code at the start of every session.
 
 ## What This Project Is
 
-A breeding roguelike deckbuilder ("Anima") inspired by Axie Infinity (breeding/parts) and Slay the Spire (roguelike run structure). Players breed creatures called **Anima** to obtain skill combinations, build a 3-Anima team, and run a node-based roguelike dungeon.
+A breeding roguelike deckbuilder ("Anima") inspired by Axie Infinity (breeding/parts) and Slay the Spire (roguelike run structure). Players breed creatures called **Anima** — framed as constructs/"Vessels," not literal animals — to obtain skill combinations, build a 3-Anima team, and run a node-based roguelike dungeon.
 
-**Core design pillar:** reward SMART breeding, smart team composition, smart deckbuilding — not just raw stats. Actively validated through combat testing (especially the Boss — see below).
+**Core design pillar:** reward SMART breeding, smart team composition, smart deckbuilding — not just raw stats.
 
-**Current phase:** MASSIVE PROGRESS THIS SESSION. All 4 colors (48 skills) fully coded and tested. Both Elites and the Boss (Warden of the Hollow) fully validated and locked. Real Slay-the-Spire-style branching map generation implemented and validated (500 seeded maps pass every rule). A new "Reforge" node mechanic implemented. The full Weaving (breeding) system — including the core genetics algorithm, Sibling restriction, Weave Count, Echo (twin-Vessel), and a persistent resource economy (Wisp/Echo Shard/Vessel Shard ledger) — is implemented and verified. **Godot client not yet started** — next major step per the user's own stated priority.
+**Current phase:** The entire backend loop is real and tested end-to-end. Full art direction is established. 6 of 7 core screens are fully locked (Hub, Weaving, Sanctum, Anima Profile, Delve, Collection). 3 of 4 room-encounter screens are locked (Resource, Treasure, Shop). **Only the Combat screen (the actual 3v3 fight UI) remains undesigned** — deliberately saved for last since it's the most complex. Godot client implementation is the confirmed next phase once screens are complete.
 
-**Terminology:** "Primitive" is being reframed as "Archetype" conceptually (parts are randomly Weaving-determined even for "pure" Animas) but "Primitive" stays the internal/code term (like Run vs. Delve).
+**Real pixel-art creature portraits are deferred** to a future outsourced pixel artist — Claude has no native raster/pixel image generation (architectural limitation of language models, not a subscription tier issue). Retrofitting real art into Godot later is confirmed easy: sprites are just texture references, so swapping a placeholder for a real PNG requires no structural changes.
 
 ## Tech Stack & Architecture
 
-C#/.NET 10 backend. Planned client: Godot (GDScript, not started). Planned server: ASP.NET Core/SignalR (not started).
+C#/.NET 10 backend, fully built and tested. Planned client: Godot (GDScript). Planned server: ASP.NET Core/SignalR (not started).
+
+**IMPORTANT:** there is NO real `CombatEventBus`. Every "event" is a direct inline check at a known checkpoint.
+
+**Recurring gotcha:** root namespace "Anima" collides with the `Anima` class (CS0118). Prefer `using AnimaUnit = Anima.Core.Models.Anima;` as the default fix everywhere — more reliable than moving `using` above the namespace.
 
 ### Solution structure
 ```
 AnimaV2.sln
 src/
-  Anima.Core/  <- PERMANENT, fully built and tested
-    Enums/GameEnums.cs
-    Models/ (Stats, Skill, Anima [now has ParentAId/ParentBId/WeaveCount], StatusEffectInstance, Enemy, EnemyBehaviorRule, Artifact, ICombatant)
-    Combat/ (CombatState, CombatEngine, SkillResolver)
-    Map/ (MapNodeType, MapNode, DungeonMap, MapGenerator) — real STS-style branching map generation
-    Reforge/ (ReforgeCandidate, ReforgePartPool, ReforgeOffer, ReforgeService)
-    Weaving/ (GeneSource, PartGenome, PartResolution, AnimaGenome, WeavingResult, SkillPool, GenomeFactory, WeavingService, WeaveRejectionReason, WeaveAttemptResult)
-    Economy/ (ResourceType, PersistentLedger, RunLedger)
-    Data/ (SampleAnimas: Ember/Reaper/Marksman[Crimson], Boulder/Aegis/Warden[Onyx],
-           Sprout/Thicket/Lotus[Verdant], Shade/Anchor/Veil[Azure], Bastion[hybrid test];
-           SampleEnemies: Grovehide/Quillfang/Sentinel/LeechMother/WardenOfTheHollow;
-           PrimitiveRoster.cs — shared 12-Primitive list used by both Weaving and Reforge)
-  Anima.ConsoleHarness/  <- THROWAWAY test runner, plain text only, now also does ASCII map printing/validation
+  Anima.Core/  <- PERMANENT, fully built and tested (Models/Combat/Map/Reforge/Weaving/Economy/Data)
+  Anima.ConsoleHarness/  <- THROWAWAY test runner + full Delve simulation
   Anima.Server/  <- NOT STARTED
 tests/Anima.Core.Tests/  <- NOT STARTED
 ```
 
-**Git status:** 40+ commits. Map generation, Reforge, and Weaving's core algorithm have each been committed as separate logical commits per the established pattern. **Check current status — Sibling restriction/Weave Count/Echo and the resource-ledger Economy work may still be pending commit as of this file's last update.**
+## Map Generation (LOCKED, VALIDATED — 500 seeded maps pass every rule)
+7×15 grid + Boss. Fixed floors: 1=Combat, 9=Treasure, 15=Shop. Random odds: Combat35%/Elite15%/Resource15%/Treasure15%/Shop15%/Reforge5%. Real data: avg 22.84 Combat/map, avg 13.64 Treasure/map. **Node types (6):** Combat/Elite/Resource(Wisp-only, deliberate)/Treasure/Shop/Reforge/Boss. Elite optional/skippable.
 
-**IMPORTANT CORRECTION:** there is NO real `CombatEventBus` pub/sub system. Every "event" (on-hit, on-death, on-Shield-gain/break) is a **direct inline check** at a known checkpoint (e.g. Last Laugh at the `PurgeDeadAnimaCards` checkpoint, Retribution where Shield hits 0 inside `ApplyDamage`).
+## Reforge (LOCKED, VERIFIED)
+Pay Wisp for ONE random part from ANY color. Accept(40/80Wisp)=swap+lose Augment; Decline=free. Run-only.
 
-**Key architecture notes (combat engine):**
-- `ICombatant` unifies `Anima`+`Enemy`. `IsSkillUsableFrom` enforces positional restrictions. `IsFriendlyTargetType` distinguishes `ChosenAny`(ally-side) from `ChosenEnemy`(enemy-side) — watch for this, has caused real bugs.
-- `SkillCategory.Summon`/`Skill.SummonFactory`/`Skill.SummonFactoryChoices` for mid-fight enemy spawning, resolved via `ResolveSummon` — random pick uses CombatEngine's shared `_random`.
-- `Enemy.EnrageTriggeredRound` + `GetEnrageMultiplier` — generic DOUBLING escalation Enrage (baseline boost at trigger Round, then the bonus itself doubles every subsequent Round). Reusable across any Elite/Boss.
-- `Enemy.PhaseTwoHpThreshold`/`PhaseTwoDamageMultiplier`/`PermanentDamageMultiplier` — a SEPARATE one-time, flat, HP-triggered buff (Warden's Phase 2), deliberately NOT wired through Enrage.
-- Real AoE Attack support: `ResolveAttack` branches on `TargetType.AllEnemies` via an extracted `ResolveSingleTargetAttack` helper.
-- `Skill.Clone()` — required so Reforge/Weaving hand out independent copies of pooled skills, not shared references (an Augment on one copy must never corrupt another Anima's copy of the "same" skill).
-- **Recurring gotcha:** root namespace "Anima" collides with the `Anima` class (CS0118). Inside a namespace block: move `using` above the declaration. At global/top-level scope (`Program.cs`): use an alias instead (`using AnimaUnit = Anima.Core.Models.Anima;`).
+## Weaving System (LOCKED, VERIFIED — real Axie Infinity mechanics as direct inspiration)
+Per part slot (ALL FOUR: Head/Frame/Tail/Crest, no exceptions): pool 6 candidate genes (D/R1/R2 × 2 parents), weighted 37.5%/9.375%/3.125% → winner becomes offspring's new Dominant. Two more rolls fill R1/R2. Mutation: 10%, R1/R2 only. Color: flat 50/50, 100% if same-color parents. Hybrid trigger: both parents pure + correct pairing = 33%.
+Sibling restriction (copies Axie): only parent-offspring + full-sibling blocked. Weave Count: max 5, cost curve 50/100/175/275/400. Echo: twin-Vessel, 5% spontaneous or guaranteed via 5 Echo Shards.
+**Naming:** players name their own Animas — mandatory prompt on Weave creation. Starter trio (Ember/Boulder/Sprout) keeps hardcoded names, no prompt.
 
-## Map Generation (LOCKED, IMPLEMENTED, VALIDATED — 500 seeded maps pass every rule)
+## Resource Economy (LOCKED, VERIFIED)
+Persistent: Wisp, Echo Shards, Vessel Shards. Run-only: all 11 Artifacts. **HP persistence across nodes = attrition** (confirmed). Reward flow: Resource=30Wisp+15%chance1Ember, Combat=50Wisp+1guaranteedEmber, Elite=120Wisp+1guaranteedEmber+25%chanceEach2nd/3rdEmber(max3)+25%chance1Shard, Boss=300Wisp+guaranteed1(50/50Echo/Vessel), noEmber.
 
-Real Slay-the-Spire-style algorithm, ported from a detailed community write-up of STS's actual generation logic (not guessed at):
-- **Grid:** 7 nodes wide, 15 floors tall, plus a Boss node added after.
-- **Path generation:** pick a random Floor 1 starting node, connect it to 1 of the 3 closest nodes on the next floor, repeat this process 6 separate times (6 independent path-chains). Rules: the first 2 Floor 1 starting nodes must differ from each other; paths can never cross geometrically.
-- **Cleanup:** remove any node with zero paths connecting to it.
-- **Fixed floors (assigned BEFORE the random pass, not after):** Floor 1 = all Combat, Floor 9 = all Treasure, Floor 15 = all Shop.
-- **Random floors:** everything else gets a type via locked odds — **Combat 35% / Elite 15% / Resource 15% / Treasure 15% / Shop 15% / Reforge 5%**.
-- **Override rules:** Elite/Shop/Reforge can't appear below Floor 6. Elite/Shop/Reforge can't be directly path-connected to each other (adjacency rule). A node with 2+ outgoing paths must lead to unique-type destinations — **except** branching into Floor 9 or 15, which are single-type by rule, making uniqueness mathematically impossible there (a known, documented, unavoidable exemption — not a bug). Shop can't be on Floor 14.
-- **Boss:** added last, connects from every Floor 15 node.
+**Ember is momentary, NOT persistent** — genuinely per-color but never banked. Each drop (Combat/Elite/Resource win, Marked Coin's roll, or a Shop Wares purchase) is resolved immediately, one at a time: **Augment now** (spend it via AugmentService on a same-color team skill) or **Convert to Wisp** (flat 15 Wisp, `EmberService.ConvertToWisp`). Shop Wares also sells 1 Ember outright for 25 Wisp (`EmberService.TryBuyEmber`, Ember Core discount applies) — bought Ember is spent immediately through the same Augment-page flow.
 
-**Node types (6 total):** Combat / Elite / Resource / Treasure / Shop / Reforge / Boss.
-- **Resource** is currently a placeholder for a future richer "Events" system (like STS's "?" nodes) — for now it just grants flat Wisp, intentionally with NO Ember (this is what keeps Combat meaningfully better than pure safe-farming).
-- **Elite is optional/skippable** (matches real STS) — players can route around Elites if they choose. Reward tier ladder (intentional, to make risk worth it): Resource (Wisp only, zero risk) < Combat (Wisp + Ember chance) < Elite (more Wisp/Ember + guaranteed/high-chance Shard fragment) < Boss (guaranteed Vessel + most Wisp + guaranteed Shard fragment, the one mandatory encounter).
+## All 11 Artifacts (LOCKED, VERIFIED, icons finalized)
+Twin Flame, Wisp Charm (+20% Wisp), Barrier Stone (+5 Shield team/Round), Vanguard's Bell (+1 Energy Rd1), Weaver's Thread (+1 hand), Marked Coin (random resource on pickup), Withering Fang (consumed any node, executes lowest-HP to 1HP if combat), Focusing Lens (every 4th Attack = 2x dmg), Silent Chime (extra action, single-use/Delve), Ember Core (20% Shop discount), Sapling Charm (heal 10% max HP any node, no revive).
 
-## Reforge Node (LOCKED, IMPLEMENTED, VERIFIED)
+**Hard cap: 3 Artifacts held per Delve, no swap mechanic** (`ArtifactService.MaxArtifactsPerDelve`). Treasure at 3/3 = reward skipped/lost entirely, no substitute (intentional punish). Shop at 3/3 = the Wares Artifact slot doesn't roll at all that visit. Boss reward is unaffected (Wisp + Shard only, never in the Artifact pool).
 
-Pay Wisp for ONE random part rolled from ANY color's Archetypes (a genuine cross-color option — echoes the core rule that parts can carry a different color than their Anima's base color). Player sees the roll before committing:
-- **Accept** (40 Wisp base, or 80 Wisp if they chose which color the roll draws from): swap happens on a chosen team Anima. Any Augment on the skill being replaced is LOST (not refunded — a real, meaningful tradeoff).
-- **Decline:** free, no change.
-- Change is **run-only** — reverts when the Delve ends, never touches the Anima's permanent data.
+## AugmentService (LOCKED, VERIFIED)
+4 types: Increase Effect(+20%) / AoE Damage(50%) / Decrease Cost(-1, unclamped=refund) / Extend(+1 Charges). Max 3/part. Cost = 1 Ember (color must match the SKILL's own archetype color, e.g. Ember/Reaper/Marksman = Crimson) + a Wisp tier: 15/30/50 for the 1st/2nd/3rd Augment on that skill. Ember Core's 20% discount applies to the Wisp tier too.
 
-## Weaving System (LOCKED, IMPLEMENTED, VERIFIED — inspired directly by real Axie Infinity mechanics, confirmed via research)
+**Eligibility is keyed on the skill's own archetype color, never the owning Anima's body Color** — a single Anima's 4 parts (Head/Frame/Tail/Crest) can each require a different Ember color if they came from mixed-color breeding (verified via Bastion: Onyx-bodied, but its Cleanse Tail is a Verdant part and only takes a Verdant Ember).
 
-**Core resolution algorithm**, per part slot (Head/Frame/Tail/Crest), independently:
-1. Each parent has their own Dominant/R1/R2 genes for that slot. Pool all 6 (3 per parent) and roll weighted by **37.5% / 9.375% / 3.125%** (per parent — sums to 100% across both). The winner becomes the **offspring's own new Dominant** for that slot (what actually manifests).
-2. Roll twice more from the remaining pool to fill the offspring's own hidden R1/R2 for that slot.
-3. **Mutation:** 10% independent chance on R1/R2 rolls ONLY (never the Dominant) — replaces with a fully random skill from that slot's pool across all 4 colors.
-
-**Color:** flat 50/50 either parent's color; 100% if both parents already share the same color (direct analog to how Axie's class inheritance works — confirmed Axie's class has NO hidden gene layer, unlike body parts, just a flat roll).
-
-**Hybrid trigger:** if both parents are fully pure and match a locked pairing (Onyx+Crimson → Vulcan, Verdant+Azure → Mirage), 33% chance it overrides normal resolution entirely. Hybrid part composition currently reuses the same normal weighted-roll logic (placeholder — hybrid-specific breeding behavior not yet designed, flagged as such).
-
-**Sibling restriction** (copies Axie's real rule exactly — NOT deep lineage checking): `Anima.ParentAId`/`ParentBId` (nullable, null = founder). Reject a Weave if either candidate is a direct parent of the other, OR both share the exact same two parents (full siblings). Grandparents/cousins/half-siblings are all fine.
-
-**Weave Count:** `Anima.WeaveCount` (starts 0). Cost = Parent A's cost-at-their-count + Parent B's cost-at-their-count, using the curve **50/100/175/275/400**. Both parents increment by 1 on a successful Weave. Reject entirely if either parent is already at 5.
-
-**Echo** (a twin-Vessel outcome — two offspring from one attempt — original to Anima, no direct Axie equivalent): two trigger paths —
-1. Spontaneous: 5% base chance, checked AFTER the hybrid-trigger check on the same roll (a hybrid and spontaneous Echo can't both come from the same single roll — this gating is intentional).
-2. Guaranteed: spending 5 Echo Shards (`spendEchoShards` — the real path; `forceEcho` also still exists as a pure test hook, untouched by the economy).
-
-When Echo triggers, **both twins run the ENTIRE independent Weaving algorithm separately** (same 2 parents, own full roll each, own hybrid-check) — twins can genuinely differ, are never duplicated. **Confirmed intentional:** a twin CAN itself come back hybrid via its own independent roll, even though hybrid+spontaneous-Echo can't happen together on a single non-Echo roll.
-
-## Resource Economy (LOCKED, IMPLEMENTED, VERIFIED)
-
-Two ledger types:
-- **`PersistentLedger`** — account-level, survives between Delves. Tracks `ResourceType` (extensible enum: Wisp, EchoShard, VesselShard — adding future materials is just adding an enum value). `GetBalance`/`CanAfford`/`Add`/`TrySpend` (afford-then-commit, never partial-spends).
-- **`RunLedger`** — Delve-scoped, resets each run. Currently just holds a `List<Artifact>` (Artifacts aren't wired to anything yet, but there's a home for them). Reforge's temporary part swaps are deliberately NOT tracked here — they're already Anima-instance-scoped.
-
-**What's persistent (survives between runs):** Wisp, Echo Shards, Vessel Shards, any future crafting materials. **What's run-only (resets each Delve):** Artifacts, temporary Reforge swaps, in-Delve HP state.
-
-Both `WeavingService.AttemptWeave` and `ReforgeService.Accept` now take a `PersistentLedger` and actually check affordability + deduct on success (previously they only priced actions without charging anything — this is now closed).
-
-## Core Game Rules (Combat)
-
+## Core Combat Rules
 ### Colors
 | Color | HP | Def | Speed | Dmg mult | Spirit mult |
 |---|---|---|---|---|---|
@@ -112,45 +64,68 @@ Both `WeavingService.AttemptWeave` and `ReforgeService.Accept` now take a `Persi
 | Onyx(Tank) | 130 | 13 | 7 | 1.0x | ~0.8x |
 | Verdant(Healer) | 100 | 10 | 10 | 0.7x | 1.3x |
 | Azure(Utility) | 70 | 10 | 13 | 1.0x | 1.0x |
-| Vulcan(hybrid, Onyx+Crimson) | 143 | 10 | 6 | 1.3x | 0.7x |
-| Mirage(hybrid, Verdant+Azure) | 60 | 10 | 13 | 0.7x | 1.4x |
 
-### Combat Math
-`Final Dmg = Base x DamageMult`. Modifier stacking: additive first, then multiplicative sequential; attacker's own mods first, opponent's(Weak) last. Shield absorbs first, additive, capped at 50. `Final Heal = Base x SpiritMult`, capped at MaxHp. DOTs bypass Defense+Shield. No randomness except deck shuffle, enemy 50/50 summon rolls, and Weaving's own probability system.
+3v3, positions 1(front)/2(mid)/3(back). Any status affecting "target's next action" MUST use Until-Consumed, never Fixed-turn:1.
 
-### Status Effects — CRITICAL PATTERN
-**Any status affecting "target's next action" MUST use Until-Consumed, NEVER Fixed-turn:1.** Found/fixed on Weak, Taunt, AND Retaliate/Thorns.
+## All 4 Colors — 48 skills, 12 Archetypes (fully coded & tested)
+**CRIMSON:** Ember(Slash/Charge/Execute/Reckless), Reaper(Rend/Lunge/Frenzy/Bloodthirst), Marksman(Snipe/Retreat/Marked Shot/Steady Aim).
+**ONYX:** Boulder(Bash/Hardened/Taunt/Courage), Aegis(Guard Strike/Fortify/Shatter/Inspire), Warden[sample, distinct from Boss](Intercept/Bristle/Disarm/Vengeance).
+**VERDANT:** Sprout(Smite/Guiding Light/Lifebloom/Soul Link), Thicket(Renew/Healing Rain/Bloom/Providence), Lotus(Purge/Silence/Cleanse/Clarity).
+**AZURE:** Shade(Pin/Exploit/Misdirect/Ambush), Anchor(Shove/Enfeeble/Hook/Last Laugh), Veil(Deflect/Safeguard/Ward/Retribution).
 
-## ALL 4 COLORS — FULLY CODED (48 skills, 12 Archetypes)
+## Enemy Roster — ALL VALIDATED
+Grovehide/Quillfang (Basic). The Sentinel (Elite DPS-check). The Leech Mother (Elite Sustain-check — proved redirect mechanics need genuine targeting ambiguity). **Warden of the Hollow** (Boss, HP220/Def11, FINAL — starter trio has no guard-bypass tool and can't win regardless of stats; ~40% win rate for un-bred teams is intentional).
 
-**CRIMSON:** P1["Ember"]:Slash/Charge/Execute/Reckless. P2["Reaper"]:Rend/Lunge/Frenzy/Bloodthirst. P3["Marksman"]:Snipe/Retreat/Marked Shot/Steady Aim.
-**ONYX:** P1["Boulder"]:Bash/Hardened/Taunt/Courage. P2["Aegis"]:Guard Strike/Fortify/Shatter/Inspire. P3["Warden"](*name collides with the Boss "Warden of the Hollow" — different entities*):Intercept/Bristle/Disarm/Vengeance.
-**VERDANT:** P1["Sprout"]:Smite/Guiding Light/Lifebloom/Soul Link. P2["Thicket"]:Renew/Healing Rain/Bloom/Providence. P3["Lotus"]:Purge/Silence/Cleanse/Clarity.
-**AZURE:** P1["Shade"]:Pin/Exploit/Misdirect/Ambush. P2["Anchor"]:Shove/Enfeeble/Hook/Last Laugh. P3["Veil"]:Deflect/Safeguard/Ward/Retribution.
+## ART DIRECTION — Fully Established
 
-Full skill details (damage numbers, energy costs, exact effects) are in `Anima_Design_Doc.md` — ask the user to paste the relevant section if needed rather than guessing.
+**Creature art:** Animas are CONSTRUCTS ("Vessels") — Axie-modular aesthetic (visible seams) over Pokemon-style cohesive design. Deep portrait art is paused/deferred (see top of file); placeholders in use. Warden of the Hollow should visually reference Slay the Spire's Bronze Automaton.
 
-## Enemy Roster — ALL FULLY VALIDATED
+**Tone:** pixel art, cozy+nostalgic but "a bit dark, like STS." **Moonlighter is a genuine structural reference** — both the Delve and Weaving loops were directly modeled on its day/night dual-loop structure.
 
-- **Grovehide/Quillfang** (Basic): tested, good pacing.
-- **The Sentinel** (Elite, DPS-check): HP105/Def12/Spd8. Enrage@Round18. Naked trio loses, augmented trio wins consistently.
-- **The Leech Mother** (Elite, Sustain-check): HP115/Def10/Spd6. No Enrage needed (structurally can't stall). **This fight proved Marked/redirect mechanics only matter with genuine targeting ambiguity** (her guard must spawn at position 1, not 2, to create real choice) — this lesson directly shaped Warden's design too.
-- **Warden of the Hollow** (Boss): HP220, Defense 11 (FINAL — do not nerf further without checking with the user; there was an extensive tuning arc that discovered the real issue was team composition, not her stats — see below). Two summonable adds create genuine targeting ambiguity. EnrageRound=20, doubling escalation. **~40% win rate for a "primitive"/un-bred team is INTENTIONAL** — ties directly to the "smart breeding" pillar; players who Weave better builds should out-farm this baseline. The starter trio (no Azure) literally cannot win regardless of her stats since it has no guard-bypass tool — swapping in Shade (Misdirect) immediately produced wins. **Key lesson: always verify you're testing with the right team before concluding a fight's balance is wrong.**
+**THE VISUAL THEME (all 6 core screens):** warm dark "sanctuary/workshop" — `radial-gradient(ellipse at 30% 20%, #4a3a2e 0%, #2b2018 45%, #1a130e 100%)` backdrop, semi-transparent dark cards (`rgba(30,22,16,0.75)`, border `rgba(201,184,158,0.2)`), warm cream text (`#e8cf9a`/`#f0e4d4`), amber accent (`#e8a03a`), horizontal amber-gradient stat bars.
 
-## Known TODOs / Not Yet Implemented
-- Echo Shard/Vessel Shard *earning* from combat (the ledger exists and can be spent, but nothing grants these yet from Elite/Boss wins).
-- Artifacts (10 locked, run-only): not wired to anything yet, though `RunLedger` has a home for them.
-- Boss loot table wiring (design locked: guaranteed Vessel + larger Wisp + guaranteed Shard fragment).
-- Healing-between-nodes wiring (~30-40% max HP, not full — tentative).
-- HP persistence across a real Delve (attrition vs. reset — undecided).
-- Cross-color hybrid combat-value question still technically open (old Bastion-vs-Boulder tests were inconclusive) — now that real Weaving exists, this could finally be retested properly with genuinely-bred hybrids.
-- Godot client: not started — this is the user's stated next major direction once Weaving is sufficiently complete.
-- ASP.NET Core/SignalR server: not started.
-- Murkbind, standalone Rustling Swarm: designed, not coded.
+**THE ANIMA LOGO** (also the unofficial game logo / the "enter a Delve" button): glowing amber magic-circle portal — concentric rings, rune-mark dots on the true diagonals, a central diamond gem (**also the symbol for the Crest skill type** — used instead of "star"), and four subtle sigils at the cardinal points, each in a unified dark medallion (deliberately NOT distinctly colored per-color), thin strokes (width 1, opacity 0.7):
+- **North = Crimson:** simple inverted-V spike
+- **East = Onyx:** open bracket-line, straight centered vertical middle
+- **South = Verdant:** trunk + 2 branch offshoots
+- **West = Azure:** two parallel curved waves
+
+**Skill-type icon set:** sword=Attack, heart=Heal, shield=Shield-granting, bolt=other Buff, **diamond=passive Crest**.
+
+**"Parts list" pattern** (every Anima card, every screen): portrait + name, then the 4 parts by name+icon, always visible — no hover/click needed.
+
+**Wisp iconography rule (important, applies everywhere):** Wisp is an ethereal/magical resource (will-o'-the-wisp themed name) — NEVER use a coin/currency icon for it, use sparkles/a glowing orb instead.
+
+### The 6 core screens (ALL fully designed, ALL warm-themed)
+1. **Hub** — resource bar top. 3 destination cards (Sanctum/Weaving/Collection). Team (parts-list cards) left + mini Anima-logo portal as Delve button right. "Last delve" summary at bottom.
+2. **Weaving** — two **"Strand"** slots (parent-selection term). Wide cards, portrait-left/details-right: name+color+Gen+Weave Count, parts list, and Hidden Threads for ALL 4 parts (including Crest) always visible. Reagent slot (Echo Shards) + Weave Cost readout, mini Weave portal button, result panel at bottom.
+3. **Sanctum** — grid of Anima cards (portrait, name, color, Gen, parts list, Weave Count progress bar). Active-team members get an amber border + "In team" badge. Cards link to Profile.
+4. **Anima Profile** — portrait (rename icon), color/Gen/Weave Count, parts list, "Threads" section (Dominant per part, dot-accent) with a **"Show hidden" toggle** (matches Axie's real hidden-gene-by-default precedent), a **"Lineage" section** (Parents/Siblings/Echo Twin — all clickable links to that Anima's own Profile), Delve History.
+5. **Delve screen** — map is LARGE/primary focus, horizontal (2 distinct starting nodes per the real algorithm, Boss far right). Real icons: sword=Combat, skull=Elite(bigger), coin=Resource, building-store=Shop, gift=Treasure, hammer=Reforge, crown=Boss(biggest). **Shape encodes risk: Combat/Elite/Boss = circles (sized by threat), safe types (Shop/Resource/Treasure) = diamond outlines.** Scroll+pinch-zoom. Team (parts-list) left, resources+Artifacts (show as X/3, the hard cap) grouped right below the map.
+6. **Collection** — top: persistent resource summary with counts+descriptions. Below: "Artifacts (X of 11 discovered)" vertical list — unlocked shows icon+name+description+"Delves won with: X"; locked shows a dim silhouette ("Undiscovered").
+
+### Room-encounter screens (3 of 4 locked, differentiated backgrounds per type)
+- **Resource** (LOCKED) — golden radial bg, glowing sparkle/wisp-orb centerpiece, "A quiet cache" flavor text, +30 Wisp shown prominently, single "Collect" button.
+- **Treasure** (LOCKED) — richer purple/magenta gem-tone bg, "A forgotten chest" flavor text, reveals the actual Artifact offered in a highlighted card, single "Claim" button.
+- **Shop** (LOCKED) — warm amber bg (closest to Hub's tone), "A weathered stall" flavor text, **only 2 sections: Rest and Wares** — there is NO standalone "Augment a skill" menu; Augmenting only ever triggers from an Ember actually in hand (a node drop, or a Wares Ember purchase below), never from browsing a list. **Rest**: heal 40% max HP for Wisp. **Wares**: fresh independent stock rolled every Shop visit (no shared/depleting pool across multiple Shops in one Delve) — 3 Ember for sale (25 Wisp each, random color per slot, independent rolls, duplicates allowed) + 1 Artifact for sale (random from the 11, excluding any the player currently holds; slot doesn't appear at all if the player is at the 3-Artifact cap). Buying an Ember immediately opens the shared Augment-page flow (same screen a node-dropped Ember uses) scoped to that slot's color. "Leave" link to exit without buying.
+  - **PENDING (design not yet built): the shared Augment-page flow itself** — the picker screen a player lands on after choosing "Augment now" on any Ember (node drop or Wares purchase). Needs to show all 3 team Animas as horizontal cards, each listing all 4 skills (grouped/filtered to the Ember's own color) with current Augments + an "apply" action, reusable identically from every entry point.
+- **Combat/Elite/Boss rooms** — NOT YET DESIGNED. Planned: darker/tenser background with a subtle red undertone for Combat/Elite, darkest/most dramatic for Boss.
+
+### The 11 Artifact Icons (finalized)
+Twin Flame=flame, Wisp Charm=sparkles, Barrier Stone=shield, Vanguard's Bell=custom clean bell outline (no clapper), Weaver's Thread=custom 3 slanted diagonal lines, Marked Coin=custom coin outline + sparkle-star inside, Withering Fang=custom sharp pointed tooth shape, Focusing Lens=custom magnifying glass (no plus sign), Silent Chime=asterisk (placeholder), Ember Core=sun, Sapling Charm=leaf.
+
+### NOT yet designed: Combat screen (the actual 3v3 fight UI — the last major screen)
+
+## Known TODOs
+1. **Design the shared Augment-page flow** — the picker reached from "Augment now" on any Ember (node drop or Wares purchase): all 3 team Animas as horizontal cards, 4 skills each (filtered to the Ember's color) + current Augments + an "apply" action. Not Shop-specific — same screen from every entry point.
+2. **Design the Combat screen** — biggest remaining piece, deliberately saved for last.
+3. **Design Combat/Elite/Boss room backgrounds** once the Combat screen itself is done.
+4. Godot client and ASP.NET Core/SignalR server: not started.
+5. Cross-color hybrid PvE combat value: correctly deprioritized (PvP-relevant, out of scope).
+6. No partial-death/revival concept — a wipe just ends the Delve. Wisp reward amounts are first-pass, need tuning — including the new Wares Artifact price (200 Wisp, picked, not specified anywhere).
 
 ## Working Preferences
 - User is a C# backend dev, no frontend experience — Claude does all coding, user handles deployment.
-- Wants build confirmation after every change.
-- Highly values honest reporting of bugs/gaps/inconclusive results — has repeatedly praised catching real issues and refusing to fabricate results (e.g. correctly declining to assert a fake "expected" statistic for a conditional probability distribution during Weaving verification) rather than being told what they want to hear.
-- Appreciates regression tests after touching shared/core code, and is comfortable running larger sample sizes when small batches prove noisy.
-- Calls Claude Code "CC" in the separate design conversation where all game design decisions actually get made — if you need details not summarized here, ask the user to paste from `Anima_Design_Doc.md` rather than inventing values.
+- Trusts Claude's design/implementation calls once discussed — flesh out design in chat first, then give a ready-to-send CC prompt (no need to ask "want me to send this").
+- Highly values honest reporting of bugs/gaps/inconclusive results, and honest correction when Claude makes a mistake (e.g. a wrong icon choice).
+- Calls Claude Code "CC" in the separate design conversation where all game design decisions get made.
