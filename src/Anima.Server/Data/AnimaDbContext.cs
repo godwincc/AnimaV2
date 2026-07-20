@@ -1,0 +1,54 @@
+using Anima.Server.Data.Entities;
+using Microsoft.EntityFrameworkCore;
+
+namespace Anima.Server.Data;
+
+public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContext(options)
+{
+    public DbSet<AccountEntity> Accounts => Set<AccountEntity>();
+    public DbSet<PersistedAnimaEntity> PersistedAnimas => Set<PersistedAnimaEntity>();
+    public DbSet<PersistedLedgerEntryEntity> LedgerEntries => Set<PersistedLedgerEntryEntity>();
+    public DbSet<PasswordResetTokenEntity> PasswordResetTokens => Set<PasswordResetTokenEntity>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AccountEntity>(e =>
+        {
+            e.HasIndex(a => a.NormalizedUsername).IsUnique();
+            e.Property(a => a.Version).IsConcurrencyToken();
+        });
+
+        modelBuilder.Entity<PersistedAnimaEntity>(e =>
+        {
+            e.HasIndex(a => new { a.AccountId, a.AnimaId }).IsUnique();
+            e.Property(a => a.Version).IsConcurrencyToken();
+        });
+
+        modelBuilder.Entity<PersistedLedgerEntryEntity>(e =>
+        {
+            e.HasIndex(l => new { l.AccountId, l.ResourceType }).IsUnique();
+            e.Property(l => l.Version).IsConcurrencyToken();
+        });
+
+        modelBuilder.Entity<PasswordResetTokenEntity>(e =>
+        {
+            e.HasIndex(t => t.AccountId);
+        });
+    }
+
+    // Sqlite has no server-generated rowversion column, so every IConcurrencyStamped entry gets its
+    // Version bumped here, immediately before the real save -- see IConcurrencyStamped's own
+    // comment for why this is the mechanism (not a DB trigger/computed column).
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        foreach (var entry in ChangeTracker.Entries<IConcurrencyStamped>())
+        {
+            if (entry.State == EntityState.Modified)
+            {
+                entry.Entity.Version++;
+            }
+        }
+
+        return base.SaveChangesAsync(cancellationToken);
+    }
+}

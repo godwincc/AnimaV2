@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Anima.Core.Enums;
 
 namespace Anima.Core.Models;
@@ -69,12 +70,17 @@ public class Skill
 
     // Summon skills (e.g. Leech Mother's Spawn Brood) add a new combatant mid-fight — narrow
     // escape hatch, same pattern as the other side-effect fields above.
+    // Not JSON-serializable (delegate) -- always null on a player-owned skill (see
+    // Anima.Server's PersistedAnimaEntity comment for the confirmed grep-backed reasoning), so this
+    // is defense-in-depth, not a live requirement today.
+    [JsonIgnore]
     public Func<Enemy>? SummonFactory { get; set; }
 
     // Random-choice summon (e.g. Warden of the Hollow's 50/50 add roll): when set, ResolveSummon
     // picks uniformly at random among these instead of using SummonFactory directly, via
     // CombatEngine's own _random -- the same "explicit, documented exception" to the "no
     // randomness in combat" rule the deck shuffle already is.
+    [JsonIgnore]
     public Func<Enemy>[]? SummonFactoryChoices { get; set; }
 
     // Guard-style summon: the new combatant takes position 1, pushing the caster back to the
