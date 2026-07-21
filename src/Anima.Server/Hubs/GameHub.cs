@@ -1,3 +1,4 @@
+using Anima.Core.Combat;
 using Anima.Core.Data;
 using Anima.Core.Economy;
 using Anima.Core.Enums;
@@ -14,10 +15,12 @@ using AnimaUnit = Anima.Core.Models.Anima;
 
 namespace Anima.Server.Hubs;
 
-// Authenticated SignalR entry point. Sanctum/Collection, Weaving, and Resource/Treasure/Shop
-// Delve nodes are ported as of this session; Combat/Reforge/Boss are not yet (Reforge stays
-// deliberately deferred -- 0% map odds, unresolved open items) -- see CLAUDE.md's
-// Server / Accounts / Auth section for the current real method-surface breakdown.
+// Authenticated SignalR entry point. Sanctum/Collection, Weaving, Resource/Treasure/Shop, and now
+// the core Combat loop (Phase 5a -- StartCombat/SubmitAction/GetLegalTargets/GetCombatState) are
+// ported as of this session; Reforge stays deliberately deferred (0% map odds, unresolved open
+// items). Combat stops the moment a winner is determined -- Victory/Defeat rewards, DelveEndService,
+// Boss-hatch + Anima Reveal, and the Artifact win-count stat are all Phase 5b, not this one -- see
+// CLAUDE.md's Server / Accounts / Auth section for the current real method-surface breakdown.
 [Authorize]
 public class GameHub(
     PlayerSessionRegistry sessions,
@@ -564,6 +567,214 @@ public class GameHub(
         if (droppedEmber is { } color) Session.PendingEmbers.Enqueue(color);
 
         return new BuyWaresArtifactResult(artifact.Name, artifact.Description, await GetPendingEmberColorsAsync());
+    }
+
+    // ---- Combat (Phase 5a: core loop only) ----
+    //
+    // Request-response, matching every other GameHub method so far -- no SignalR server-push in
+    // this pass (real push-based live turn streaming is a decision for whenever the actual Godot
+    // client build reveals whether it's needed, not built speculatively here). SubmitAction
+    // resolves one player action, then auto-resolves any consecutive enemy turns/Round transitions
+    // server-side immediately via CombatEngine.AdvanceUntilPlayerActionNeeded, returning the full
+    // resulting state + event log in the one response.
+
+    // Which enemy encounter a node type fights -- mirrors the console harness's own Delve-
+    // simulation convention exactly (Combat = Grovehide+Quillfang with Quillfang at position 2,
+    // Boss = Warden of the Hollow) with one deliberate simplification: Elite alternates
+    // Sentinel/LeechMother in the harness (a counter, for even test coverage); here it's a random
+    // 50/50 pick instead, since a hub-driven real Delve has no such "even coverage" requirement.
+    private static List<Enemy> BuildEncounter(MapNodeType type) => type switch
+    {
+        MapNodeType.Boss => [SampleEnemies.CreateWardenOfTheHollow()],
+        MapNodeType.Elite => Random.Shared.Next(2) == 0
+            ? [SampleEnemies.CreateSentinel()]
+            : [SampleEnemies.CreateLeechMother()],
+        MapNodeType.Combat => BuildBasicCombatEncounter(),
+        _ => throw new HubException($"{type} is not a Combat-capable node type."),
+    };
+
+    private static List<Enemy> BuildBasicCombatEncounter()
+    {
+        var quillfang = SampleEnemies.CreateQuillfang();
+        quillfang.Position = 2;
+        return [SampleEnemies.CreateGrovehide(), quillfang];
+    }
+
+    // Starts (or, on a repeat call for the same still-uncleared node, idempotently resumes) combat
+    // for the current Combat/Elite/Boss node. CombatState.PlayerTeam is built from run.Team
+    // DIRECTLY, never a rebuilt/copied list -- the exact reference DelveRun.Team already holds (see
+    // CLAUDE.md's own HP-attrition gotcha) -- so HP mutations during the fight persist for free
+    // through the shared Anima instances, same as every other node type already relies on.
+    // ArtifactService.OnNodeVisited runs before the fight starts (Withering Fang's pre-fight snipe,
+    // Sapling Charm's on-entry heal), matching the harness's own combat-node sequence. Rolls Round
+    // 1's turn order and auto-resolves anything before the first player turn (e.g. a faster enemy
+    // going first) via AdvanceUntilPlayerActionNeeded -- see that method's own comment.
+    public async Task<CombatStatus> StartCombat()
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        var node = run.CurrentNode ?? throw new HubException("Not currently standing on a node.");
+        if (node.Type is not (MapNodeType.Combat or MapNodeType.Elite or MapNodeType.Boss))
+            throw new HubException($"Current node is {node.Type?.ToString() ?? "untyped"}, not a Combat/Elite/Boss node.");
+        if (run.ClearedNodes.Contains(node)) throw new HubException("This node has already been cleared.");
+
+        if (Session.ActiveCombat is { } existing) return BuildCombatStatus(existing);
+
+        var state = new CombatState { PlayerTeam = run.Team, EnemyTeam = BuildEncounter(node.Type.Value) };
+
+        ArtifactService.OnNodeVisited(run.RunLedger, run.Team, state);
+        foreach (var member in run.Team) await rosterRepo.SaveAnimaAsync(AccountId, member);
+
+        var engine = new CombatEngine(state, run.RunLedger.Artifacts);
+        var log = new List<string>();
+        engine.OnLog = log.Add;
+        engine.StartCombat();
+        engine.AdvanceUntilPlayerActionNeeded();
+
+        Session.ActiveCombat = state;
+        return BuildCombatStatus(state, log);
+    }
+
+    // Resume/reconnect support, same spirit as GetPendingWeave -- but see PlayerSession.
+    // ActiveCombat's own comment for why this is in-memory-only rather than DB-backed like
+    // PendingWeave: nothing valuable is uniquely at risk yet in Phase 5a.
+    public Task<CombatStatus> GetCombatState()
+    {
+        var state = Session.ActiveCombat ?? throw new HubException("No active combat for this connection.");
+        return Task.FromResult(BuildCombatStatus(state));
+    }
+
+    // The legal target set for a hand card, from the CURRENT actor's perspective -- what the
+    // client's highlight-then-confirm flow (CLAUDE.md's Combat Screen Design) reads before
+    // presenting a "choose a target" prompt. No ownership check on the card here (read-only,
+    // nothing committed) -- SubmitAction is the actual enforcement point for "does this card
+    // belong to the acting Anima."
+    public Task<IReadOnlyList<CombatantRef>> GetLegalTargets(int handIndex)
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        var state = Session.ActiveCombat ?? throw new HubException("No active combat for this connection.");
+        if (state.CurrentActor is not AnimaUnit anima) throw new HubException("It is not a player Anima's turn.");
+        if (handIndex < 0 || handIndex >= state.Hand.Count) throw new HubException("Invalid hand index.");
+
+        var engine = new CombatEngine(state, run.RunLedger.Artifacts);
+        var targets = engine.GetLegalTargets(anima, state.Hand[handIndex]);
+
+        return Task.FromResult<IReadOnlyList<CombatantRef>>(targets.Select(t => ToCombatantRef(state, t)).ToList());
+    }
+
+    // Plays a card + target (or Passes) for whoever CombatState.CurrentActor currently is --
+    // rejects if request.AnimaId doesn't match (not that Anima's turn) or the target isn't in
+    // GetLegalTargets' set for that card (illegal target). Auto-resolves subsequent enemy turns
+    // and Round transitions immediately afterward via AdvanceUntilPlayerActionNeeded, so the
+    // response already reflects everything up to the next real player decision (or a terminal
+    // Victory/Defeat). On a terminal outcome: marks the node cleared and drops Session.
+    // ActiveCombat -- Phase 5b picks up from here (Wisp/Ember/Shard rewards, DelveEndService,
+    // Boss-hatch + Anima Reveal, the Artifact win-count stat) via whatever it adds next, not this
+    // method.
+    public async Task<CombatStatus> SubmitAction(SubmitActionRequest request)
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        var state = Session.ActiveCombat ?? throw new HubException("No active combat for this connection.");
+
+        if (state.CurrentActor is not AnimaUnit anima || anima.Id != request.AnimaId)
+            throw new HubException("It is not that Anima's turn.");
+
+        var engine = new CombatEngine(state, run.RunLedger.Artifacts);
+        var log = new List<string>();
+        engine.OnLog = log.Add;
+
+        try
+        {
+            if (request.HandIndex is not { } handIndex)
+            {
+                engine.ResolvePlayerPass(anima);
+            }
+            else
+            {
+                if (handIndex < 0 || handIndex >= state.Hand.Count) throw new HubException("Invalid hand index.");
+                var skill = state.Hand[handIndex];
+
+                var legalTargets = engine.GetLegalTargets(anima, skill);
+                var explicitTarget = request.Target is { } t ? ResolveCombatantRef(state, t) : null;
+                if (legalTargets.Count > 0 && (explicitTarget == null || !legalTargets.Contains(explicitTarget)))
+                    throw new HubException("Illegal target for that skill.");
+
+                engine.ResolvePlayerAction(anima, skill, explicitTarget);
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            // CombatEngine's own validation (turn ownership, skill ownership, position-usability,
+            // Energy affordability) -- see ResolvePlayerAction's own comment for why the engine
+            // enforces these itself here but not on RunRound's callback-driven path.
+            throw new HubException(ex.Message);
+        }
+
+        var outcome = engine.AdvanceUntilPlayerActionNeeded();
+
+        foreach (var member in run.Team) await rosterRepo.SaveAnimaAsync(AccountId, member);
+
+        if (outcome != CombatOutcome.InProgress)
+        {
+            run.MarkCurrentNodeCleared();
+            Session.ActiveCombat = null;
+        }
+
+        return BuildCombatStatus(state, log);
+    }
+
+    private static ICombatant ResolveCombatantRef(CombatState state, CombatantRef reference)
+    {
+        var list = reference.Side switch
+        {
+            "Player" => state.PlayerTeam.Cast<ICombatant>().ToList(),
+            "Enemy" => state.EnemyTeam.Cast<ICombatant>().ToList(),
+            _ => throw new HubException($"Unknown target side '{reference.Side}'."),
+        };
+        if (reference.Index < 0 || reference.Index >= list.Count) throw new HubException("Target index out of range.");
+        return list[reference.Index];
+    }
+
+    private static CombatantRef ToCombatantRef(CombatState state, ICombatant combatant)
+    {
+        var playerIndex = state.PlayerTeam.FindIndex(a => ReferenceEquals(a, combatant));
+        if (playerIndex >= 0) return new CombatantRef("Player", playerIndex);
+
+        var enemyIndex = state.EnemyTeam.FindIndex(e => ReferenceEquals(e, combatant));
+        return new CombatantRef("Enemy", enemyIndex);
+    }
+
+    private static CombatStatus BuildCombatStatus(CombatState state, IReadOnlyList<string>? log = null)
+    {
+        CombatantSummary ToSummary(string side, int index, ICombatant c) => new(
+            side, index, c.DisplayName, c.CurrentHp, c.MaxHp, c.Position, c.CurrentHp > 0,
+            c.ActiveStatuses.Select(s => s.Keyword).ToList());
+
+        var playerSummaries = state.PlayerTeam.Select((a, i) => ToSummary("Player", i, a)).ToList();
+        var enemySummaries = state.EnemyTeam.Select((e, i) => ToSummary("Enemy", i, e)).ToList();
+
+        var hand = state.Hand
+            .Select((s, i) =>
+            {
+                var owner = state.PlayerTeam.First(a => a.DeckSkills.Contains(s));
+                return new HandCardSummary(i, owner.Id, s.Name, s.Category.ToString(), s.Color?.ToString() ?? "", s.EnergyCost, s.Target.ToString());
+            })
+            .ToList();
+
+        var turnOrder = state.TurnOrder.Select(c => ToTurnEntry(state, c)).ToList();
+
+        var outcome = CombatEngine.GetOutcome(state);
+        var currentActor = outcome == CombatOutcome.InProgress ? state.CurrentActor as AnimaUnit : null;
+
+        return new CombatStatus(
+            state.RoundNumber, state.SharedEnergy, playerSummaries, enemySummaries, hand,
+            state.DrawPile.Count, state.DiscardPile.Count, turnOrder, state.TurnIndex,
+            currentActor?.Id, outcome.ToString(), log ?? Array.Empty<string>());
+    }
+
+    private static CombatTurnEntry ToTurnEntry(CombatState state, ICombatant combatant)
+    {
+        var reference = ToCombatantRef(state, combatant);
+        return new CombatTurnEntry(reference.Side, reference.Index, combatant.DisplayName);
     }
 
     private static Skill GetSkillForPart(AnimaUnit a, string part) => part switch

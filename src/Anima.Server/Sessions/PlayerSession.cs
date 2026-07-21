@@ -1,3 +1,4 @@
+using Anima.Core.Combat;
 using Anima.Core.Economy;
 using Anima.Core.Enums;
 using Anima.Core.Models;
@@ -59,4 +60,17 @@ public sealed class PlayerSession
     // CLAUDE.md's new-scope note: "no resume, no save/load of in-progress run state"). Discarded
     // (never persisted) the moment the connection drops, per PlayerSessionRegistry.OnDisconnected.
     public DelveRun? ActiveDelveRun { get; set; }
+
+    // Deliberately in-memory only, same lifetime as ActiveDelveRun above -- NOT the PendingWeave/
+    // PendingPurchasedEmber DB-backed treatment. Reasoning: ActiveDelveRun (the enclosing container
+    // a Combat node lives inside) is ALREADY in-memory-only and already lost on disconnect today --
+    // persisting CombatState to a DB while its own enclosing DelveRun does not would be a strange
+    // half-measure (a resumed fight pointing at a Delve that no longer exists). Nothing valuable is
+    // uniquely at risk either: HP loss taken mid-fight is already durable (CombatState.PlayerTeam IS
+    // ActiveDelveRun.Team -- the same Anima instances SanctumRosterRepository saves after every
+    // action), and Phase 5a grants no rewards/spends no currency to enter or resolve a fight, unlike
+    // a paid-for Weave or a bought Ember. Losing this to a disconnect costs at most "redo this one
+    // fight" (once Combat/Boss support restarting an interrupted node -- not itself a Phase 5a
+    // concern), not real economic value already committed.
+    public CombatState? ActiveCombat { get; set; }
 }

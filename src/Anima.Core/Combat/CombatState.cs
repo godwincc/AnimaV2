@@ -21,4 +21,18 @@ public class CombatState
     // combat (team-wide, not per-Anima -- same "shared resource" shape as SharedEnergy). Resets
     // between fights the same way TwinFlameUsed does, for free, via a fresh CombatState per combat.
     public int AttackSkillsPlayed { get; set; }
+
+    // This Round's rolled Initiative order + a cursor into it -- moved here (off a private
+    // CombatEngine instance field) so a resumable, hub-driven combat can reconstruct a fresh
+    // CombatEngine on every SubmitAction call (matching every other GameHub method's stateless-
+    // per-call pattern) without losing its place mid-Round. RunRound's own synchronous loop
+    // (console harness) doesn't read TurnIndex at all -- it still just foreachs its own local
+    // initiativeOrder list -- so this is purely additive for the new resumable path; see
+    // CombatEngine.AdvanceUntilPlayerActionNeeded.
+    public List<ICombatant> TurnOrder { get; set; } = new();
+    public int TurnIndex { get; set; }
+
+    // The combatant whose turn it currently is, under the resumable model -- null once TurnIndex
+    // runs off the end (a Round just finished, or combat is over and nobody has re-rolled yet).
+    public ICombatant? CurrentActor => TurnIndex >= 0 && TurnIndex < TurnOrder.Count ? TurnOrder[TurnIndex] : null;
 }

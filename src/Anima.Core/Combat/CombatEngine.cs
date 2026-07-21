@@ -28,10 +28,6 @@ public class CombatEngine
     private const int FocusingLensInterval = 4;
     private const double FocusingLensMultiplier = 2.0;
 
-    // This Round's Initiative order, captured once per Round so Ambush can check whether the
-    // acting combatant is literally the last entry in it (see GetOffensiveCrestMultiplier).
-    private List<ICombatant> _currentInitiativeOrder = new();
-
     // Silent Chime: set by TryActivateSilentChime, consumed by ActionPhase the moment this
     // Anima's normal turn resolves this Round -- see both for the full mechanic.
     private Anima? _pendingExtraActionAnima;
@@ -124,7 +120,7 @@ public class CombatEngine
         Log($"=== Round {_state.RoundNumber} ===");
         RoundStartPhase();
         var initiativeOrder = InitiativePhase();
-        _currentInitiativeOrder = initiativeOrder;
+        _state.TurnOrder = initiativeOrder;
         LogInitiativeOrder(initiativeOrder);
         ActionPhase(initiativeOrder);
         RoundEndPhase();
@@ -320,6 +316,21 @@ public class CombatEngine
             return;
         }
 
+        // explicitTarget: null here (always) -- RunRound's callback-driven path has never chosen
+        // a specific target, only a skill (see ExecutePlayerSkill's own comment). Preserves this
+        // path's exact original behavior byte-for-byte.
+        ExecutePlayerSkill(anima, skill, null);
+    }
+
+    // The real per-action resolution body, factored out of ResolvePlayerTurn so both the original
+    // callback-driven path (RunRound/ChoosePlayerSkill, used by the console harness) and the new
+    // hub-driven resumable path (ResolvePlayerAction, used by GameHub.SubmitAction) share one
+    // implementation. explicitTarget is the ONE new capability this adds: when set, it's used
+    // instead of ResolveSkill's internal algorithmic SelectTarget pick -- see ResolveAttack/
+    // ResolveMove/ResolveBuff/ResolveDebuff/ResolveHeal's own explicitTarget params. Passing null
+    // (RunRound's path always does) reproduces the pre-existing algorithmic-only behavior exactly.
+    private void ExecutePlayerSkill(Anima anima, Skill skill, ICombatant? explicitTarget)
+    {
         if (!IsSkillUsableFrom(skill, anima.Position))
         {
             Log($"{anima.DisplayName} cannot use {skill.Name} from position {anima.Position} -- passes.");
@@ -355,10 +366,143 @@ public class CombatEngine
             _state.PlayerTeam.Cast<ICombatant>().ToList(),
             anima.BaseStats.DamageMultiplier,
             anima.BaseStats.SpiritMultiplier,
-            focusingLensTriggered);
+            focusingLensTriggered,
+            explicitTarget);
 
         _state.Hand.Remove(skill);
         _state.DiscardPile.Add(skill);
+    }
+
+    // ---- Resumable, hub-driven combat API (GameHub.StartCombat/SubmitAction/GetLegalTargets) ----
+    //
+    // Everything above this point is the ORIGINAL engine, untouched in behavior: RunRound() still
+    // runs an entire Round synchronously via the ChoosePlayerSkill callback and algorithmic-only
+    // targeting, exactly as the console harness's 140-check suite already exercises it. A real
+    // human player needs an actual network round-trip per decision, which RunRound's single
+    // blocking call cannot provide -- see CLAUDE.md's Phase 5a audit notes for the full reasoning.
+    // The methods below are a NEW, parallel entry point that decomposes the same private phase
+    // methods (RoundStartPhase/InitiativePhase/RoundEndPhase/ResolveEnemyTurn/ConsumeStun/
+    // ExecutePlayerSkill) RunRound already uses, so both paths share one rules implementation --
+    // this is additive, not a rewrite.
+
+    // Advances combat until either a living player Anima is next to act (returns InProgress, and
+    // _state.CurrentActor is that Anima -- the caller should now collect a real decision and call
+    // ResolvePlayerAction/ResolvePlayerPass) or the fight ends (Victory/Defeat). Auto-resolves
+    // every Enemy turn and Round transition (top-up draw, Energy refill, Enrage checks, a fresh
+    // Initiative roll) along the way, with zero player input needed for any of that -- matching
+    // this phase's "auto-resolve consecutive enemy turns" requirement. Call once right after
+    // StartCombat() (to resolve anything before Round 1's first player turn, including a faster
+    // enemy going first) and again after every ResolvePlayerAction/ResolvePlayerPass.
+    public CombatOutcome AdvanceUntilPlayerActionNeeded()
+    {
+        while (true)
+        {
+            var outcome = GetOutcome(_state);
+            if (outcome != CombatOutcome.InProgress) return outcome;
+
+            if (_state.TurnOrder.Count == 0 || _state.TurnIndex >= _state.TurnOrder.Count)
+            {
+                // TurnOrder.Count > 0 means a Round's Action Phase just ran out of entries --
+                // RoundEndPhase (RoundNumber++) hasn't fired for it yet. Count == 0 is the very
+                // first call after StartCombat(), where no Round has run at all yet -- skip
+                // straight to rolling Round 1, exactly matching RunRound's own Round-1 sequence
+                // (StartCombat's opening TopUpHand + RoundStartPhase's top-up both firing, the
+                // second one a harmless no-op -- see this method's own CLAUDE.md writeup).
+                if (_state.TurnOrder.Count > 0) RoundEndPhase();
+
+                Log($"=== Round {_state.RoundNumber} ===");
+                RoundStartPhase();
+                var order = InitiativePhase();
+                _state.TurnOrder = order;
+                _state.TurnIndex = 0;
+                LogInitiativeOrder(order);
+
+                outcome = GetOutcome(_state);
+                if (outcome != CombatOutcome.InProgress) return outcome;
+                continue;
+            }
+
+            var actor = _state.TurnOrder[_state.TurnIndex];
+            if (actor.CurrentHp <= 0) { _state.TurnIndex++; continue; } // may have died mid-round
+            if (ConsumeStun(actor)) { _state.TurnIndex++; continue; } // skips this actor's turn entirely
+
+            if (actor is Anima) return CombatOutcome.InProgress; // pause here -- a real player decision is needed
+
+            ResolveEnemyTurn((Enemy)actor);
+            _state.TurnIndex++;
+        }
+    }
+
+    // Resolves ONE player action for whoever _state.CurrentActor currently is. Throws
+    // InvalidOperationException (GameHub translates this to a client-facing HubException) for
+    // every validation RunRound's callback-driven path always trusted its caller (ChoosePlayerSkill)
+    // to have already upheld -- turn ownership, skill ownership, position-usability, Energy
+    // affordability -- since here the "caller" is an untrusted network client, not a scripted
+    // harness. explicitTarget must be one of GetLegalTargets(anima, skill)'s entries, or null if
+    // that set is empty (SelfTarget/AllAllies/AllEnemies skills resolve with no explicit target).
+    public void ResolvePlayerAction(Anima anima, Skill skill, ICombatant? explicitTarget)
+    {
+        if (!ReferenceEquals(_state.CurrentActor, anima))
+            throw new InvalidOperationException($"It is not {anima.DisplayName}'s turn.");
+        if (!anima.DeckSkills.Contains(skill))
+            throw new InvalidOperationException($"{skill.Name} does not belong to {anima.DisplayName}.");
+        if (!IsSkillUsableFrom(skill, anima.Position))
+            throw new InvalidOperationException($"{skill.Name} cannot be used from position {anima.Position}.");
+        if (GetEffectiveEnergyCost(anima, skill) > _state.SharedEnergy)
+            throw new InvalidOperationException("Insufficient Energy.");
+
+        ExecutePlayerSkill(anima, skill, explicitTarget);
+        _state.TurnIndex++;
+    }
+
+    // The explicit "Pass" action -- distinct from ChoosePlayerSkill returning null (RunRound's
+    // path), since here a real client is choosing to pass, not a callback declining to act.
+    public void ResolvePlayerPass(Anima anima)
+    {
+        if (!ReferenceEquals(_state.CurrentActor, anima))
+            throw new InvalidOperationException($"It is not {anima.DisplayName}'s turn.");
+
+        Log($"{anima.DisplayName} passes.");
+        _state.TurnIndex++;
+    }
+
+    // The legal target set for a hand card, from actor's perspective -- what GameHub.
+    // GetLegalTargets exposes for the client's highlight-then-confirm flow (CLAUDE.md's Combat
+    // Screen Design). Most TargetTypes are actually algorithmic/automatic (front position, lowest
+    // HP, Marked-priority) rather than a real player choice -- see CLAUDE.md's Phase 5a audit
+    // notes on TargetType.ChosenEnemy/ChosenAny being the only two types SampleAnimas.cs's own
+    // comments describe as "stands in for a real player choice." For the automatic types this
+    // still returns the resolved single target (not an empty set) so the client's "outline the
+    // legal target set, then click-to-confirm" flow works uniformly across every non-self,
+    // non-AoE skill, even ones with only one possible target.
+    public IReadOnlyList<ICombatant> GetLegalTargets(Anima actor, Skill skill)
+    {
+        var opposingTeam = _state.EnemyTeam.Cast<ICombatant>().Where(c => c.CurrentHp > 0).ToList();
+        var friendlyTeam = _state.PlayerTeam.Cast<ICombatant>().Where(c => c.CurrentHp > 0).ToList();
+
+        static List<ICombatant> AsList(ICombatant? c) => c is null ? [] : [c];
+
+        return skill.Target switch
+        {
+            TargetType.SelfTarget => [actor],
+            TargetType.AllEnemies or TargetType.AllAllies => [],
+            // The only two genuine "player picks among several" target types (see this method's
+            // own comment) -- ChosenAny is the ally-side "any position" type in this engine (same
+            // convention IsFriendlyTargetType/SampleAnimas.cs already use), so it offers the
+            // friendly team, not the enemy team.
+            TargetType.ChosenEnemy => opposingTeam,
+            TargetType.ChosenAny => friendlyTeam,
+            TargetType.Enemy or TargetType.LowestHpEnemy => AsList(SelectTarget(skill.Target, opposingTeam)),
+            TargetType.Ally or TargetType.LowestHpAlly => AsList(SelectTarget(skill.Target, friendlyTeam)),
+            _ => [],
+        };
+    }
+
+    public static CombatOutcome GetOutcome(CombatState state)
+    {
+        if (state.EnemyTeam.All(e => e.CurrentHp <= 0)) return CombatOutcome.Victory;
+        if (state.PlayerTeam.All(a => a.CurrentHp <= 0)) return CombatOutcome.Defeat;
+        return CombatOutcome.InProgress;
     }
 
     // Clarity (Verdant Cleansing kit): -1 energy cost (min 0) on the skill this Anima plays.
@@ -407,7 +551,8 @@ public class CombatEngine
         List<ICombatant> friendlyTeam,
         double damageMultiplier,
         double spiritMultiplier,
-        bool focusingLensTriggered = false)
+        bool focusingLensTriggered = false,
+        ICombatant? explicitTarget = null)
     {
         // Weak is Until-Consumed (same pattern as Shield/Primed) — it persists on its target
         // until that target's next skill use of any kind, regardless of Round/turn-order timing.
@@ -421,19 +566,19 @@ public class CombatEngine
         switch (skill.Category)
         {
             case SkillCategory.Attack:
-                ResolveAttack(actor, skill, opposingTeam, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied, focusingLensTriggered);
+                ResolveAttack(actor, skill, opposingTeam, friendlyTeam, damageMultiplier, spiritMultiplier, weakMagnitude, frenzied, focusingLensTriggered, explicitTarget);
                 break;
             case SkillCategory.Move:
-                ResolveMove(actor, skill, opposingTeam, friendlyTeam);
+                ResolveMove(actor, skill, opposingTeam, friendlyTeam, explicitTarget);
                 break;
             case SkillCategory.Buff:
-                ResolveBuff(actor, skill, friendlyTeam);
+                ResolveBuff(actor, skill, friendlyTeam, explicitTarget);
                 break;
             case SkillCategory.Debuff:
-                ResolveDebuff(actor, skill, opposingTeam, friendlyTeam);
+                ResolveDebuff(actor, skill, opposingTeam, friendlyTeam, explicitTarget);
                 break;
             case SkillCategory.Heal:
-                ResolveHeal(actor, skill, friendlyTeam, spiritMultiplier, weakMagnitude);
+                ResolveHeal(actor, skill, friendlyTeam, spiritMultiplier, weakMagnitude, explicitTarget);
                 break;
             case SkillCategory.Summon:
                 ResolveSummon(actor, skill);
@@ -481,7 +626,7 @@ public class CombatEngine
             case "Reckless" or "Vengeance" when anima.CurrentHp < anima.MaxHp * 0.5:
                 Log($"  {anima.DisplayName}'s {anima.Crest.Name} triggers: damage x{CrestConditionalMultiplier:0.##} (HP below 50%).");
                 return CrestConditionalMultiplier;
-            case "Ambush" when _currentInitiativeOrder.Count > 0 && ReferenceEquals(_currentInitiativeOrder[^1], actor):
+            case "Ambush" when _state.TurnOrder.Count > 0 && ReferenceEquals(_state.TurnOrder[^1], actor):
                 Log($"  {anima.DisplayName}'s Ambush triggers: damage x{AmbushMultiplier:0.##} (acted last this Round).");
                 return AmbushMultiplier;
             case "Steady Aim" when anima.Position == 3:
@@ -522,7 +667,8 @@ public class CombatEngine
         double spiritMultiplier,
         int weakMagnitude,
         bool frenzied = false,
-        bool focusingLensTriggered = false)
+        bool focusingLensTriggered = false,
+        ICombatant? explicitTarget = null)
     {
         // AoE Attack (e.g. an "AoE Damage" augment converting Slash to hit everyone): repeats the
         // full single-target pipeline once per living enemy -- BaseDamage is expected to already
@@ -539,7 +685,7 @@ public class CombatEngine
             return;
         }
 
-        var target = SelectTarget(skill.Target, opposingTeam);
+        var target = explicitTarget ?? SelectTarget(skill.Target, opposingTeam);
         if (target == null)
         {
             Log("  No valid target.");
@@ -926,7 +1072,7 @@ public class CombatEngine
         }
     }
 
-    private void ResolveHeal(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam, double spiritMultiplier, int weakMagnitude)
+    private void ResolveHeal(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam, double spiritMultiplier, int weakMagnitude, ICombatant? explicitTarget = null)
     {
         // Healing Rain (Verdant Sustain kit): instant AoE heal, hits every living ally rather
         // than a single SelectTarget result.
@@ -939,7 +1085,7 @@ public class CombatEngine
             return;
         }
 
-        var target = skill.Target == TargetType.SelfTarget ? actor : SelectTarget(skill.Target, friendlyTeam);
+        var target = skill.Target == TargetType.SelfTarget ? actor : explicitTarget ?? SelectTarget(skill.Target, friendlyTeam);
         if (target == null)
         {
             Log("  No valid target.");
@@ -1049,7 +1195,7 @@ public class CombatEngine
         Log($"  {target.DisplayName} HP: {target.CurrentHp}");
     }
 
-    private void ResolveMove(ICombatant actor, Skill skill, List<ICombatant> opposingTeam, List<ICombatant> friendlyTeam)
+    private void ResolveMove(ICombatant actor, Skill skill, List<ICombatant> opposingTeam, List<ICombatant> friendlyTeam, ICombatant? explicitTarget = null)
     {
         if (skill.TargetPositionOverride is { Length: > 0 } positions)
         {
@@ -1061,7 +1207,7 @@ public class CombatEngine
         if (skill.MoveOffset is int offset)
         {
             var team = IsFriendlyTargetType(skill.Target) ? friendlyTeam : opposingTeam;
-            var target = skill.Target == TargetType.SelfTarget ? actor : SelectTarget(skill.Target, team);
+            var target = skill.Target == TargetType.SelfTarget ? actor : explicitTarget ?? SelectTarget(skill.Target, team);
             if (target == null)
             {
                 Log("  No valid target.");
@@ -1124,7 +1270,7 @@ public class CombatEngine
         }
     }
 
-    private void ResolveBuff(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam)
+    private void ResolveBuff(ICombatant actor, Skill skill, List<ICombatant> friendlyTeam, ICombatant? explicitTarget = null)
     {
         // Ward (Azure Pseudo-Heal kit): instant AoE Shield, hits every living ally rather than a
         // single SelectTarget result -- same shape as Healing Rain's AoE heal in ResolveHeal.
@@ -1141,7 +1287,7 @@ public class CombatEngine
         // Safeguard (Azure Pseudo-Heal kit): the first Buff skill to target someone OTHER than
         // its own caster -- `target` resolves to an ally for those, and to `actor` (unchanged
         // behavior) for every existing SelfTarget Buff skill.
-        var target = skill.Target == TargetType.SelfTarget ? actor : SelectTarget(skill.Target, friendlyTeam);
+        var target = skill.Target == TargetType.SelfTarget ? actor : explicitTarget ?? SelectTarget(skill.Target, friendlyTeam);
         if (target == null)
         {
             Log("  No valid target.");
@@ -1209,10 +1355,10 @@ public class CombatEngine
 
     // Non-Attack, non-self debuffs that pick a target other than the caster (Pin's Stun,
     // Misdirect's Marked) -- distinct from ResolveBuff, which always targets the caster.
-    private void ResolveDebuff(ICombatant actor, Skill skill, List<ICombatant> opposingTeam, List<ICombatant> friendlyTeam)
+    private void ResolveDebuff(ICombatant actor, Skill skill, List<ICombatant> opposingTeam, List<ICombatant> friendlyTeam, ICombatant? explicitTarget = null)
     {
         var team = IsFriendlyTargetType(skill.Target) ? friendlyTeam : opposingTeam;
-        var target = SelectTarget(skill.Target, team);
+        var target = explicitTarget ?? SelectTarget(skill.Target, team);
         if (target == null)
         {
             Log("  No valid target.");

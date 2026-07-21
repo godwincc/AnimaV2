@@ -97,6 +97,59 @@ public record WeaveConfirmResult(AnimaSummary Primary, AnimaSummary? Twin);
 // Parent/Echo-Twin names, closing both Profile-facing gaps flagged in the Phase 1 report. Not
 // folded into AnimaSummary/GetRoster -- Sanctum's grid never needs hidden Threads, only Profile
 // does, so this stays a separate, deliberately un-batched call.
+// ---- Combat (Phase 5a: core loop only -- no rewards, no Boss-hatch, see GameHub's own comment) ----
+
+// Side is "Player" or "Enemy"; Index is the combatant's position within that side's PlayerTeam/
+// EnemyTeam list -- stable for the life of one combat (both lists are append-only: ResolveSummon
+// can add a new Enemy mid-fight, but nothing ever removes or reorders an entry, dead combatants
+// just sit at CurrentHp 0). Enemy has no Id field the way Anima does, so this pair is the one
+// identity scheme that works for both sides uniformly.
+public record CombatantRef(string Side, int Index);
+
+// Statuses is just the keyword list (e.g. ["Shield", "Weak"]) -- magnitude/duration/charges are
+// deliberately omitted from this first wire shape; add them if/when the real client build shows
+// it needs them (see CLAUDE.md's own "don't design for hypothetical requirements" guidance).
+public record CombatantSummary(
+    string Side,
+    int Index,
+    string Name,
+    int CurrentHp,
+    int MaxHp,
+    int Position,
+    bool Alive,
+    IReadOnlyList<string> Statuses);
+
+// OwnerAnimaId is which of the 3 team Anima this card came from (Head/Frame/Tail) -- a real gap
+// found while building Phase 5a's own verification harness: CombatEngine.ResolvePlayerAction
+// rejects a card that isn't in the acting Anima's own DeckSkills, so a client has no way to know
+// which of Hand's cards are even legal to try for the CURRENT actor without this.
+public record HandCardSummary(int HandIndex, string OwnerAnimaId, string SkillName, string Category, string Color, int EnergyCost, string TargetType);
+
+public record CombatTurnEntry(string Side, int Index, string Name);
+
+// Outcome is "InProgress" | "Victory" | "Defeat" -- Phase 5b (rewards, DelveEndService, Boss-hatch,
+// Anima Reveal) picks up from here once Outcome stops being "InProgress"; this phase stops the
+// moment a winner is determined, per its own scope. CurrentActorAnimaId is null once Outcome is
+// terminal (nobody's turn anymore) -- while InProgress it's always set, since
+// AdvanceUntilPlayerActionNeeded only ever pauses on a living player Anima's turn.
+public record CombatStatus(
+    int RoundNumber,
+    int SharedEnergy,
+    IReadOnlyList<CombatantSummary> PlayerTeam,
+    IReadOnlyList<CombatantSummary> EnemyTeam,
+    IReadOnlyList<HandCardSummary> Hand,
+    int DrawPileCount,
+    int DiscardPileCount,
+    IReadOnlyList<CombatTurnEntry> TurnOrder,
+    int TurnIndex,
+    string? CurrentActorAnimaId,
+    string Outcome,
+    IReadOnlyList<string> EventLog);
+
+// HandIndex null = Pass. Target must be one of GetLegalTargets(HandIndex)'s entries, or null if
+// that set came back empty (SelfTarget/AllAllies/AllEnemies skills need no explicit target).
+public record SubmitActionRequest(string AnimaId, int? HandIndex, CombatantRef? Target);
+
 public record AnimaDetail(
     string Id,
     string Name,
