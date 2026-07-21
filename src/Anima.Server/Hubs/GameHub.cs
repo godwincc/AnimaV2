@@ -747,23 +747,28 @@ public class GameHub(
                 // StartCombat already required the current node to be Combat/Elite/Boss, so Type
                 // is guaranteed set here.
                 var nodeType = run.CurrentNode!.Type!.Value;
+
+                // Marked cleared BEFORE granting the reward (reordered in Phase 5c) so a Boss
+                // Victory's DelveCompleteSnapshot -- captured inside GrantBossVictoryRewardAsync --
+                // correctly counts the Boss node itself as cleared. Harmless for Combat/Elite too;
+                // clearing is just bookkeeping, not gated on anything reward-related.
+                run.MarkCurrentNodeCleared();
+                Session.ActiveCombat = null;
+
                 if (nodeType == MapNodeType.Boss)
                 {
                     var (reward, preview) = await GrantBossVictoryRewardAsync(run);
                     victoryReward = reward;
                     bossHatchPreview = preview;
+                    // Boss is the map's terminal node -- nothing left to visit past it, so the
+                    // Delve itself ends here too (unlike a Combat/Elite Victory, which just clears
+                    // the node and lets the player keep moving through the same DelveRun).
+                    Session.ActiveDelveRun = null;
                 }
                 else
                 {
                     victoryReward = await GrantNonBossVictoryRewardAsync(run, nodeType);
                 }
-
-                run.MarkCurrentNodeCleared();
-                Session.ActiveCombat = null;
-                // Boss is the map's terminal node -- nothing left to visit past it, so the Delve
-                // itself ends here too (unlike a Combat/Elite Victory, which just clears the node
-                // and lets the player keep moving through the same DelveRun).
-                if (nodeType == MapNodeType.Boss) Session.ActiveDelveRun = null;
                 break;
             }
             case CombatOutcome.Defeat:
@@ -833,7 +838,21 @@ public class GameHub(
         var echoShardGranted = Session.Ledger.GetBalance(ResourceType.EchoShard) > echoShardBefore;
 
         var genome = BossHatchService.Roll(Random.Shared);
-        Session.PendingBossHatch = new PendingBossHatch { Genome = genome };
+
+        // Delve Complete summary (Phase 5c) -- captured HERE, the last point run (== Session.
+        // ActiveDelveRun) is reachable before the caller nulls it. FloorIndexReached/NodesCleared
+        // read run.CurrentNode/run.ClearedNodes AFTER the caller's MarkCurrentNodeCleared() already
+        // ran (see SubmitAction's reordering comment), so the Boss node itself counts as cleared.
+        // WispEarnedSoFar already reflects the Wisp just granted above (it reads the live
+        // in-memory ledger, not a DB round-trip). See DelveCompleteSnapshot's own comment for why
+        // this is deliberately NOT persisted to PendingBossHatchEntity/DB.
+        var completeSummary = new DelveCompleteSnapshot(
+            run.CurrentNode!.FloorIndex,
+            run.ClearedNodes.Count,
+            run.Team.Select(a => a.Name).ToList(),
+            run.WispEarnedSoFar);
+
+        Session.PendingBossHatch = new PendingBossHatch { Genome = genome, CompleteSummary = completeSummary };
         await pendingBossHatchRepo.SaveAsync(AccountId, Session.PendingBossHatch);
         await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
 
@@ -850,7 +869,14 @@ public class GameHub(
     // ConfirmWeave exactly (see its own comment): materializes via AnimaMaterializationService only
     // now, adds to SanctumRoster, persists, and clears the pending row. No "Twin" concept here --
     // Boss-hatch always produces exactly one Anima, unlike a Weave's Echo Twin possibility.
-    public async Task<AnimaSummary> ConfirmBossHatch(ConfirmBossHatchRequest request)
+    //
+    // DelveComplete (Phase 5c) rides along on this SAME response rather than needing its own
+    // confirmation step or a separate hub method -- it's a read of already-resolved end-of-run
+    // state (floors/Anima/Wisp), not another mandatory action, and the locked design's own
+    // sequencing wants it to appear only once naming is done ("Anima Reveal confirms first, THEN
+    // Delve Complete appends"). Null only on the rare reconnect-before-confirming case (see
+    // DelveCompleteSnapshot's own comment).
+    public async Task<BossHatchConfirmResult> ConfirmBossHatch(ConfirmBossHatchRequest request)
     {
         var pending = Session.PendingBossHatch ?? throw new HubException("No pending Boss-hatch Anima to confirm.");
         if (string.IsNullOrWhiteSpace(request.Name)) throw new HubException("A name is required.");
@@ -861,7 +887,11 @@ public class GameHub(
         Session.PendingBossHatch = null;
         await pendingBossHatchRepo.DeleteAsync(AccountId);
 
-        return ToSummary(anima);
+        var delveComplete = pending.CompleteSummary is { } snapshot
+            ? new DelveCompleteSummary(snapshot.FloorIndexReached, snapshot.NodesCleared, snapshot.AnimaUsedNames, snapshot.TotalWispEarnedThisRun)
+            : null;
+
+        return new BossHatchConfirmResult(ToSummary(anima), delveComplete);
     }
 
     // Reconnect support, same spirit as GetPendingWeave -- lets a client that just reconnected

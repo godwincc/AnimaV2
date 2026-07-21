@@ -182,6 +182,19 @@ public record DelveEndSummary(int WispEarnedThisRun, int WispKept, int WispForfe
 // this needs no second name field.
 public record ConfirmBossHatchRequest(string Name);
 
+// The Boss ceremony's appended "Delve Complete" summary (Phase 5c), per the locked Match Result
+// design -- floors reached, Anima used, total Wisp earned this run. Deliberately NOT the same
+// shape as DelveEndSummary (Defeat/Retreat): there's no keep/forfeit split here, since Victory has
+// no Wisp penalty at all. FloorIndexReached is 0-indexed, same convention NodeRef/DelveEndSummary
+// already use. Rides along on ConfirmBossHatch's response (see BossHatchConfirmResult) rather than
+// needing its own hub method -- see ConfirmBossHatch's own comment for why.
+public record DelveCompleteSummary(int FloorIndexReached, int NodesCleared, IReadOnlyList<string> AnimaUsedNames, int TotalWispEarnedThisRun);
+
+// DelveComplete is null only if a reconnect happened between Boss Victory and this call (see
+// Sessions.DelveCompleteSnapshot's own comment) -- every real, uninterrupted Boss Victory populates
+// it.
+public record BossHatchConfirmResult(AnimaSummary Anima, DelveCompleteSummary? DelveComplete);
+
 public record AnimaDetail(
     string Id,
     string Name,
