@@ -92,6 +92,12 @@ StyleCopReport.xml
 !Directory.Build.rsp
 *.sbr
 *.tlb
+# Godot 4.x client (client/) -- .godot/ is a per-machine import/class cache (rebuilt automatically
+# on first editor/headless run, see CLAUDE.md's Godot Client Connectivity section), builds/ is
+# export output (a Web export's .wasm alone is ~40MB, never belongs in source control).
+client/.godot/
+client/builds/
+
 *.tli
 *.tlh
 *.tmp

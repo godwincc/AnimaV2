@@ -1,0 +1,20 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly, since the parameters
+; that go here are meant to be set in the Project Settings dialog.
+
+config_version=5
+
+[application]
+
+config/name="AnimaClient"
+run/main_scene="res://scenes/connectivity_test.tscn"
+config/features=PackedStringArray("4.3", "GDScript")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/GDSignalR/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

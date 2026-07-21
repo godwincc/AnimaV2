@@ -32,9 +32,27 @@ builder.Services.AddScoped<AccountRepository>();
 builder.Services.AddScoped<AccountArtifactStatRepository>();
 builder.Services.AddScoped<PendingWeaveRepository>();
 builder.Services.AddScoped<PendingPurchasedEmberRepository>();
+builder.Services.AddScoped<PendingBossHatchRepository>();
 builder.Services.AddSingleton<PlayerSessionRegistry>();
 
 builder.Services.AddSignalR();
+
+// Dev-only CORS for the Godot Web export's own local test server. Port 8060 is an arbitrary pick
+// (this pass just needs *a* static file server to host the exported index.html/wasm somewhere
+// other than the API's own origin) -- update this if the real client dev workflow settles on a
+// different port. Only the REST Auth endpoints (register/login) actually need this: the WebSocket
+// hub connection itself is not subject to CORS (browsers don't preflight/block cross-origin WS
+// the way they do fetch/XHR), confirmed against GDSignalR's skip-negotiate direct-WebSocket
+// approach. A real deployment (itch.io etc.) will need its actual hosting origin added here --
+// AllowAnyOrigin is deliberately NOT used so this doesn't silently stay permissive later.
+const string DevClientCorsPolicy = "DevClientCors";
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(DevClientCorsPolicy, policy =>
+        policy.WithOrigins("http://localhost:8060", "http://127.0.0.1:8060")
+            .AllowAnyMethod()
+            .AllowAnyHeader());
+});
 
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
     ?? throw new InvalidOperationException("Jwt configuration section is missing.");
@@ -86,6 +104,7 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
+app.UseCors(DevClientCorsPolicy);
 app.UseAuthentication();
 app.UseAuthorization();
 
