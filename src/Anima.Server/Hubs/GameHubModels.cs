@@ -51,6 +51,27 @@ public record ClaimTreasureResult(string? ArtifactName, string? ArtifactDescript
 // FormatException).
 public record AugmentPendingEmberRequest(string AnimaId, string Part, string AugmentType);
 
+// ---- Shop ----
+
+// Color is null for a slot that's already been bought this visit. EmberPrice/ArtifactPrice/
+// RestWispCost are the ACTUAL current cost (Ember Core's discount already applied if held), not
+// the base constant -- the client shouldn't need to re-derive that discount itself.
+public record ShopEmberSlot(int Index, string? Color);
+
+public record ShopStockSnapshot(
+    IReadOnlyList<ShopEmberSlot> EmberSlots,
+    string? ArtifactName,
+    string? ArtifactDescription,
+    int EmberPrice,
+    int ArtifactPrice,
+    int RestWispCost);
+
+public record RestAtShopResult(int WispSpent);
+
+public record BuyWaresEmberRequest(int SlotIndex);
+
+public record BuyWaresArtifactResult(string ArtifactName, string ArtifactDescription, IReadOnlyList<string> PendingEmberColors);
+
 // ---- Weaving ----
 
 public record AttemptWeaveRequest(string ParentAId, string ParentBId, bool SpendEchoShards);

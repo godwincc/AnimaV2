@@ -11,6 +11,7 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
     public DbSet<PasswordResetTokenEntity> PasswordResetTokens => Set<PasswordResetTokenEntity>();
     public DbSet<AccountArtifactStatEntity> ArtifactStats => Set<AccountArtifactStatEntity>();
     public DbSet<PendingWeaveEntity> PendingWeaves => Set<PendingWeaveEntity>();
+    public DbSet<PendingPurchasedEmberEntity> PendingPurchasedEmbers => Set<PendingPurchasedEmberEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -46,6 +47,14 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
         modelBuilder.Entity<PendingWeaveEntity>(e =>
         {
             e.HasIndex(w => w.AccountId).IsUnique();
+            e.Property(w => w.Version).IsConcurrencyToken();
+        });
+
+        // NOT unique on AccountId -- more than one purchased Ember can be pending at once (a
+        // single Shop visit can sell up to 3), unlike PendingWeaveEntity's "at most one" rule.
+        modelBuilder.Entity<PendingPurchasedEmberEntity>(e =>
+        {
+            e.HasIndex(w => w.AccountId);
             e.Property(w => w.Version).IsConcurrencyToken();
         });
     }

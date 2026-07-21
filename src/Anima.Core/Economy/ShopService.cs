@@ -1,6 +1,7 @@
 using Anima.Core.Data;
 using Anima.Core.Enums;
 using Anima.Core.Models;
+using AnimaUnit = Anima.Core.Models.Anima;
 
 namespace Anima.Core.Economy;
 
@@ -10,11 +11,11 @@ namespace Anima.Core.Economy;
 // MaxArtifactsPerDelve, or -- purely defensively -- if the player somehow already holds all 11).
 public sealed record ShopStock(IReadOnlyList<AnimaColor> EmberOffers, Artifact? ArtifactOffer);
 
-// Rolls a Shop node's Wares stock and resolves purchases from it. Deliberately stateless/
-// per-visit -- "each Shop node rolls its own independent stock on entry, no shared/depleting pool
-// across multiple Shop nodes in the same Delve" is satisfied simply by calling Roll fresh every
-// time a Shop node is entered, nothing persisted between visits. The Shop's other section (Rest,
-// a flat HP-for-Wisp heal) has no economy-layer state of its own, so it isn't modeled here.
+// Rolls a Shop node's Wares stock and resolves purchases from it, plus Rest (the Shop's other
+// section). Deliberately stateless/per-visit -- "each Shop node rolls its own independent stock
+// on entry, no shared/depleting pool across multiple Shop nodes in the same Delve" is satisfied
+// simply by calling Roll fresh every time a Shop node is entered, nothing persisted between
+// visits.
 public static class ShopService
 {
     public const int EmberOfferCount = 3;
@@ -66,5 +67,36 @@ public static class ShopService
 
         var droppedEmber = ArtifactService.Grant(runLedger, artifact, ledger, rng);
         return (true, droppedEmber);
+    }
+
+    // Rest's flat team-wide heal. Not specified anywhere beyond CLAUDE.md's own "heal 40% max HP
+    // for Wisp" -- neither the exact Wisp price nor whether it targets the whole team or one
+    // chosen Anima is locked. Picked WHOLE TEAM (matching Sapling Charm's own "heals the whole
+    // team" precedent -- see ArtifactService.OnNodeVisited -- and there's no target-picker UI in
+    // the locked Shop screen design), repeatable as many times as affordable (no stated
+    // once-per-visit cap), no revive (matches the game's general "no partial-death/revival"
+    // rule -- only currently-living members heal). RestWispCost=40 is a first-pass number picked
+    // to loosely echo the 40% heal figure -- needs tuning like every other Wisp amount in
+    // RewardService. Flag to the user if a different price or per-Anima targeting was intended.
+    public const double RestHealPercent = 0.40;
+    public const int RestWispCost = 40;
+
+    // Same "check affordability, only then spend" shape as TryBuyArtifact/EmberService.TryBuyEmber.
+    // Ember Core's discount applies here too, for consistency with every other Wisp-costing Shop
+    // action -- Ember Core's own flavor text only names "Reforge and Augment," but the CODE already
+    // applies it more broadly (Wares' Ember/Artifact purchases too, see ApplyEmberCoreDiscount's
+    // own comment) -- a pre-existing scope choice, not something introduced here.
+    public static bool TryRest(List<AnimaUnit> team, PersistentLedger ledger, RunLedger? runLedger = null)
+    {
+        var cost = ArtifactService.ApplyEmberCoreDiscount(RestWispCost, runLedger);
+        if (!ledger.TrySpend(ResourceType.Wisp, cost)) return false;
+
+        foreach (var anima in team.Where(a => a.CurrentHp > 0))
+        {
+            var healAmount = (int)Math.Round(anima.MaxHp * RestHealPercent);
+            anima.CurrentHp = Math.Min(anima.MaxHp, anima.CurrentHp + healAmount);
+        }
+
+        return true;
     }
 }

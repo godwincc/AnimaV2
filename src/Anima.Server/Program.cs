@@ -31,6 +31,7 @@ builder.Services.AddScoped<PersistentLedgerRepository>();
 builder.Services.AddScoped<AccountRepository>();
 builder.Services.AddScoped<AccountArtifactStatRepository>();
 builder.Services.AddScoped<PendingWeaveRepository>();
+builder.Services.AddScoped<PendingPurchasedEmberRepository>();
 builder.Services.AddSingleton<PlayerSessionRegistry>();
 
 builder.Services.AddSignalR();

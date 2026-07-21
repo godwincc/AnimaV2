@@ -14,8 +14,9 @@ using AnimaUnit = Anima.Core.Models.Anima;
 
 namespace Anima.Server.Hubs;
 
-// Authenticated SignalR entry point. Sanctum/Collection, Weaving, and Resource/Treasure Delve
-// nodes are ported as of this session; Combat/Shop/Reforge/Boss are not yet -- see CLAUDE.md's
+// Authenticated SignalR entry point. Sanctum/Collection, Weaving, and Resource/Treasure/Shop
+// Delve nodes are ported as of this session; Combat/Reforge/Boss are not yet (Reforge stays
+// deliberately deferred -- 0% map odds, unresolved open items) -- see CLAUDE.md's
 // Server / Accounts / Auth section for the current real method-surface breakdown.
 [Authorize]
 public class GameHub(
@@ -24,7 +25,8 @@ public class GameHub(
     PersistentLedgerRepository ledgerRepo,
     AccountRepository accountRepo,
     AccountArtifactStatRepository artifactStatsRepo,
-    PendingWeaveRepository pendingWeaveRepo) : Hub
+    PendingWeaveRepository pendingWeaveRepo,
+    PendingPurchasedEmberRepository purchasedEmberRepo) : Hub
 {
     private Guid AccountId =>
         Guid.Parse(Context.User!.FindFirst(JwtTokenService.AccountIdClaimType)!.Value);
@@ -96,8 +98,9 @@ public class GameHub(
     // The Collection screen's Artifact list: the full 12-Artifact catalog (SampleArtifacts, the
     // same "the full Artifact roster" source ShopService/the Delve simulation already use) joined
     // against this account's discovered/won-with stats. Discovered is now real for anything ever
-    // granted by ClaimTreasureNode (see AccountArtifactStatRepository.RecordDiscoveryAsync);
-    // DelvesWonWith is still always 0 -- that write path needs Boss-victory resolution (Phase 5).
+    // granted by ClaimTreasureNode or BuyWaresArtifact (both just call the one shared
+    // AccountArtifactStatRepository.RecordDiscoveryAsync); DelvesWonWith is still always 0 -- that
+    // write path needs Boss-victory resolution (Phase 5).
     public async Task<IReadOnlyList<ArtifactSummary>> GetArtifactCollection()
     {
         var stats = await artifactStatsRepo.LoadAsync(AccountId);
@@ -328,7 +331,7 @@ public class GameHub(
 
         foreach (var color in emberDrops) Session.PendingEmbers.Enqueue(color);
 
-        return new CollectResourceResult(wispGranted, Session.PendingEmbers.Select(c => c.ToString()).ToList());
+        return new CollectResourceResult(wispGranted, await GetPendingEmberColorsAsync());
     }
 
     // Treasure's Claim action: reveals one uniformly-random Artifact from the full 12-Artifact
@@ -350,7 +353,7 @@ public class GameHub(
 
         if (!ArtifactService.HasArtifactCapacity(run.RunLedger))
         {
-            return new ClaimTreasureResult(null, null, true, Session.PendingEmbers.Select(c => c.ToString()).ToList());
+            return new ClaimTreasureResult(null, null, true, await GetPendingEmberColorsAsync());
         }
 
         var artifact = SampleArtifacts.AllFactories[Random.Shared.Next(SampleArtifacts.AllFactories.Count)]();
@@ -361,30 +364,69 @@ public class GameHub(
 
         if (droppedEmber is { } color) Session.PendingEmbers.Enqueue(color);
 
-        return new ClaimTreasureResult(artifact.Name, artifact.Description, false, Session.PendingEmbers.Select(c => c.ToString()).ToList());
+        return new ClaimTreasureResult(artifact.Name, artifact.Description, false, await GetPendingEmberColorsAsync());
+    }
+
+    // The account's full current "next Ember to resolve" queue, front-to-back -- PAID (DB-backed
+    // PendingPurchasedEmberEntity) ones first, then FREE (in-memory Session.PendingEmbers) ones.
+    // See ConvertPendingEmberToWisp/AugmentPendingEmber for why paid resolves first: a purchased
+    // Ember represents real spent Wisp, so it's the higher-stakes item to clear from the queue.
+    private async Task<IReadOnlyList<string>> GetPendingEmberColorsAsync()
+    {
+        var purchased = await purchasedEmberRepo.LoadAsync(AccountId);
+        return purchased.Select(c => c.ToString()).Concat(Session.PendingEmbers.Select(c => c.ToString())).ToList();
     }
 
     // Ember pickup-choice flow, option 1 of 2: "Convert to Wisp." Resolves the FRONT of the
-    // pending queue only (see PlayerSession.PendingEmbers's own comment for why it's a queue, not
-    // a single slot) -- CLAUDE.md's locked spec: "sequential if multiple dropped, never batched."
+    // combined queue -- a paid (Wares-bought) Ember first if any is pending, per
+    // PendingPurchasedEmberEntity's own comment; otherwise the FREE queue's front (see
+    // PlayerSession.PendingEmbers's own comment for why it's a queue, not a single slot) --
+    // CLAUDE.md's locked spec: "sequential if multiple dropped, never batched."
     public async Task<IReadOnlyList<string>> ConvertPendingEmberToWisp()
     {
-        if (Session.PendingEmbers.Count == 0) throw new HubException("No pending Ember to resolve.");
+        var purchased = await purchasedEmberRepo.LoadAsync(AccountId);
+        if (purchased.Count > 0)
+        {
+            await purchasedEmberRepo.RemoveOldestAsync(AccountId);
+        }
+        else if (Session.PendingEmbers.Count > 0)
+        {
+            Session.PendingEmbers.Dequeue();
+        }
+        else
+        {
+            throw new HubException("No pending Ember to resolve.");
+        }
 
-        Session.PendingEmbers.Dequeue();
         EmberService.ConvertToWisp(Session.Ledger);
         await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
 
-        return Session.PendingEmbers.Select(c => c.ToString()).ToList();
+        return await GetPendingEmberColorsAsync();
     }
 
-    // Ember pickup-choice flow, option 2 of 2: "Augment now." Spends the FRONT of the pending
-    // queue's Ember on one skill; AugmentService itself checks the skill's color actually matches
-    // that Ember's color (among everything else it validates) before committing anything.
+    // Ember pickup-choice flow, option 2 of 2: "Augment now." Spends the FRONT of the combined
+    // queue (paid first, same order as ConvertPendingEmberToWisp) on one skill; AugmentService
+    // itself checks the skill's color actually matches that Ember's color (among everything else
+    // it validates) before committing anything.
     public async Task<IReadOnlyList<string>> AugmentPendingEmber(AugmentPendingEmberRequest request)
     {
-        if (Session.PendingEmbers.Count == 0) throw new HubException("No pending Ember to resolve.");
-        var emberColor = Session.PendingEmbers.Peek();
+        var purchased = await purchasedEmberRepo.LoadAsync(AccountId);
+        AnimaColor emberColor;
+        bool resolvingPurchased;
+        if (purchased.Count > 0)
+        {
+            emberColor = purchased[0];
+            resolvingPurchased = true;
+        }
+        else if (Session.PendingEmbers.Count > 0)
+        {
+            emberColor = Session.PendingEmbers.Peek();
+            resolvingPurchased = false;
+        }
+        else
+        {
+            throw new HubException("No pending Ember to resolve.");
+        }
 
         var anima = Session.Roster.FindById(request.AnimaId) ?? throw new HubException($"Anima {request.AnimaId} not found in this account's roster.");
         var skill = GetSkillForPart(anima, request.Part);
@@ -396,11 +438,132 @@ public class GameHub(
         if (!result.Success)
             throw new HubException($"Augment rejected: {result.RejectionReason}.");
 
-        Session.PendingEmbers.Dequeue();
+        if (resolvingPurchased) await purchasedEmberRepo.RemoveOldestAsync(AccountId);
+        else Session.PendingEmbers.Dequeue();
+
         await rosterRepo.SaveAnimaAsync(AccountId, anima);
         await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
 
-        return Session.PendingEmbers.Select(c => c.ToString()).ToList();
+        return await GetPendingEmberColorsAsync();
+    }
+
+    // Shared entry point for every Shop action (GetShopStock/RestAtShop/BuyWaresEmber/
+    // BuyWaresArtifact) -- ensures ArtifactService.OnNodeVisited (Withering Fang/Sapling Charm),
+    // the Wares roll, and the map-visited marker (MarkCurrentNodeCleared) all happen EXACTLY ONCE
+    // per Shop visit, the first time the player does ANYTHING at this node, regardless of which
+    // action that happens to be. Idempotent on repeat calls for the same node -- returns the
+    // already-rolled ShopVisitState instead of rerolling (see ShopVisitState's own comment: "each
+    // Shop node rolls its own independent stock on entry", not on every read).
+    private async Task<ShopVisitState> EnsureShopVisited(DelveRun run)
+    {
+        var node = run.CurrentNode ?? throw new HubException("Not currently standing on a node.");
+        if (node.Type != MapNodeType.Shop) throw new HubException($"Current node is {node.Type?.ToString() ?? "untyped"}, not Shop.");
+
+        if (Session.CurrentShopStock is { } existing && existing.Node == node) return existing;
+
+        ArtifactService.OnNodeVisited(run.RunLedger, run.Team);
+        foreach (var member in run.Team) await rosterRepo.SaveAnimaAsync(AccountId, member);
+
+        var stock = ShopService.Roll(run.RunLedger, Random.Shared);
+        var state = new ShopVisitState
+        {
+            Node = node,
+            EmberSlots = stock.EmberOffers.Cast<AnimaColor?>().ToList(),
+            ArtifactOffer = stock.ArtifactOffer,
+        };
+        run.MarkCurrentNodeCleared();
+        Session.CurrentShopStock = state;
+
+        return state;
+    }
+
+    private static ShopStockSnapshot BuildShopSnapshot(ShopVisitState state, RunLedger runLedger)
+    {
+        var emberSlots = state.EmberSlots.Select((c, i) => new ShopEmberSlot(i, c?.ToString())).ToList();
+
+        var emberPrice = ArtifactService.ApplyEmberCoreDiscount(EmberService.ShopPrice, runLedger);
+        var artifactPrice = ArtifactService.ApplyEmberCoreDiscount(ShopService.ArtifactWaresPrice, runLedger);
+        var restPrice = ArtifactService.ApplyEmberCoreDiscount(ShopService.RestWispCost, runLedger);
+
+        return new ShopStockSnapshot(emberSlots, state.ArtifactOffer?.Name, state.ArtifactOffer?.Description, emberPrice, artifactPrice, restPrice);
+    }
+
+    // Reads (rolling fresh stock only on the first call for this node, see EnsureShopVisited) the
+    // current Wares offer.
+    public async Task<ShopStockSnapshot> GetShopStock()
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        var state = await EnsureShopVisited(run);
+        return BuildShopSnapshot(state, run.RunLedger);
+    }
+
+    // Rest: heal the whole team 40% max HP for Wisp (see ShopService.TryRest's own comment for the
+    // whole-team/price judgment calls). Repeatable as many times as affordable in one visit --
+    // there's no stated once-per-visit cap.
+    public async Task<RestAtShopResult> RestAtShop()
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        await EnsureShopVisited(run);
+
+        var wispBefore = Session.Ledger.GetBalance(ResourceType.Wisp);
+        if (!ShopService.TryRest(run.Team, Session.Ledger, run.RunLedger))
+            throw new HubException("Insufficient Wisp.");
+        var wispSpent = wispBefore - Session.Ledger.GetBalance(ResourceType.Wisp);
+
+        foreach (var member in run.Team) await rosterRepo.SaveAnimaAsync(AccountId, member);
+        await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+
+        return new RestAtShopResult(wispSpent);
+    }
+
+    // Buying an Ember from Wares is the SAME shape as the pending-Weave bug (Phase 4 audit): Wisp
+    // is spent immediately (EmberService.TryBuyEmber), before the Augment/Convert choice is ever
+    // made. Unlike a free node-dropped Ember, this one goes into the DB-backed
+    // PendingPurchasedEmberEntity queue, not the in-memory Session.PendingEmbers one -- see that
+    // entity's own comment.
+    public async Task<IReadOnlyList<string>> BuyWaresEmber(BuyWaresEmberRequest request)
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        var state = await EnsureShopVisited(run);
+
+        if (request.SlotIndex < 0 || request.SlotIndex >= state.EmberSlots.Count)
+            throw new HubException("Invalid Ember slot index.");
+        var color = state.EmberSlots[request.SlotIndex] ?? throw new HubException("That Ember slot has already been bought.");
+
+        if (!EmberService.TryBuyEmber(Session.Ledger, run.RunLedger))
+            throw new HubException("Insufficient Wisp.");
+
+        state.EmberSlots[request.SlotIndex] = null;
+        await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+        await purchasedEmberRepo.AddAsync(AccountId, color);
+
+        return await GetPendingEmberColorsAsync();
+    }
+
+    // Buying the Wares Artifact: same AccountArtifactStatRepository.RecordDiscoveryAsync call
+    // ClaimTreasureNode already uses (Phase 3), not a duplicated call site -- both just call
+    // through to that one shared repository method.
+    public async Task<BuyWaresArtifactResult> BuyWaresArtifact()
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        var state = await EnsureShopVisited(run);
+
+        var artifact = state.ArtifactOffer ?? throw new HubException("No Artifact is currently offered.");
+
+        var (success, droppedEmber) = ShopService.TryBuyArtifact(artifact, run.RunLedger, Session.Ledger, Random.Shared);
+        if (!success) throw new HubException("Insufficient Wisp.");
+
+        state.ArtifactOffer = null;
+        await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+        await artifactStatsRepo.RecordDiscoveryAsync(AccountId, artifact.Name);
+
+        // The Artifact's own OnPickup bonus (e.g. Marked Coin) -- an incidental bonus from the
+        // purchase already paid for, not something separately bought, so it's FREE from this
+        // Ember's own perspective -- same handling ClaimTreasureNode already gives an
+        // OnPickup-dropped Ember (the in-memory queue, not the paid one).
+        if (droppedEmber is { } color) Session.PendingEmbers.Enqueue(color);
+
+        return new BuyWaresArtifactResult(artifact.Name, artifact.Description, await GetPendingEmberColorsAsync());
     }
 
     private static Skill GetSkillForPart(AnimaUnit a, string part) => part switch

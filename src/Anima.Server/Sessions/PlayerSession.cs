@@ -39,13 +39,21 @@ public sealed class PlayerSession
     public PendingWeave? PendingWeave { get; set; }
 
     // Deliberately in-memory only, tied to this session/connection -- NOT the same fix as
-    // PendingWeave above. An Ember is a momentary pickup with no stored value anywhere by design
-    // (see EmberService's own comment: "nothing... ever stores an Ember anywhere"), so losing an
-    // unresolved one to a dropped connection costs at most one Augment/15 Wisp -- far below
-    // PendingWeave's stakes (a whole materialized Vessel + a capped, precious WeaveCount charge).
-    // A real queue (not a single slot), per CLAUDE.md's locked pickup-flow spec: "sequential if
-    // multiple dropped -- never batched" (relevant once Elite/Combat can drop up to 3 at once).
+    // PendingWeave above, and ONLY for FREE (node-dropped) Ember -- a purchased one is a real,
+    // paid-for pending outcome and gets PendingPurchasedEmberEntity's DB-backed treatment instead
+    // (a Phase 4 audit finding; see GameHub.BuyWaresEmber). A free Ember has no stored value
+    // anywhere by design (see EmberService's own comment: "nothing... ever stores an Ember
+    // anywhere"), so losing an unresolved one to a dropped connection costs at most one
+    // Augment/15 Wisp of upside never gained -- far below PendingWeave's stakes (a whole
+    // materialized Vessel + a capped, precious WeaveCount charge) or a purchased Ember's stakes
+    // (real Wisp already spent). A real queue (not a single slot), per CLAUDE.md's locked
+    // pickup-flow spec: "sequential if multiple dropped -- never batched" (relevant once
+    // Elite/Combat can drop up to 3 at once).
     public Queue<AnimaColor> PendingEmbers { get; } = new();
+
+    // Deliberately in-memory only, tied to this session/connection -- see ShopVisitState's own
+    // comment for why losing this to a disconnect is cosmetic, not a currency loss.
+    public ShopVisitState? CurrentShopStock { get; set; }
 
     // Deliberately in-memory only, tied to this session/connection -- explicit scope decision (see
     // CLAUDE.md's new-scope note: "no resume, no save/load of in-progress run state"). Discarded
