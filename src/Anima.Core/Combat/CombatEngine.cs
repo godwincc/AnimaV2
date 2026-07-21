@@ -28,10 +28,6 @@ public class CombatEngine
     private const int FocusingLensInterval = 4;
     private const double FocusingLensMultiplier = 2.0;
 
-    // Silent Chime: set by TryActivateSilentChime, consumed by ActionPhase the moment this
-    // Anima's normal turn resolves this Round -- see both for the full mechanic.
-    private Anima? _pendingExtraActionAnima;
-
     // Narration hook — kept out of Core so callers (console, UI, tests) decide how/whether to surface it.
     public Action<string>? OnLog { get; set; }
 
@@ -129,16 +125,18 @@ public class CombatEngine
     // Silent Chime: single-use per Delve, so activating it consumes the Artifact from runLedger
     // immediately (mirrors Withering Fang's "consumed on use" pattern in ArtifactService) --
     // returns false and does nothing if it isn't owned/already used. The extra action itself is
-    // granted later, by ActionPhase, the moment `target`'s normal turn resolves in whichever
-    // Round is running when this was called -- there's no mid-Round player-decision loop yet, so
-    // the caller is expected to activate before calling RunRound() for the Round they want it in.
+    // granted later -- by ActionPhase for RunRound's synchronous path, or by ResolvePlayerAction/
+    // ResolvePlayerPass for the resumable path -- the moment `target`'s normal turn resolves in
+    // whichever Round is running when this was called. Stored on CombatState (not an engine
+    // field, see its own comment) so it survives a fresh CombatEngine reconstructed between this
+    // call and the Round it applies to.
     public bool TryActivateSilentChime(Anima target, RunLedger runLedger)
     {
         var silentChime = runLedger.Artifacts.FirstOrDefault(a => a.Name == "Silent Chime");
         if (silentChime == null) return false;
 
         runLedger.Artifacts.Remove(silentChime);
-        _pendingExtraActionAnima = target;
+        _state.PendingSilentChimeTarget = target;
         return true;
     }
 
@@ -270,9 +268,9 @@ public class CombatEngine
             // Silent Chime: grants the targeted Anima one immediate extra action right after
             // their current action resolves, within the same Round -- checked here, right after
             // the normal turn above, rather than re-entering the initiative loop.
-            if (actor is Anima chimeTarget && ReferenceEquals(_pendingExtraActionAnima, chimeTarget) && chimeTarget.CurrentHp > 0)
+            if (actor is Anima chimeTarget && ReferenceEquals(_state.PendingSilentChimeTarget, chimeTarget) && chimeTarget.CurrentHp > 0)
             {
-                _pendingExtraActionAnima = null;
+                _state.PendingSilentChimeTarget = null;
                 Log($"  Silent Chime grants {chimeTarget.DisplayName} an extra action!");
                 ResolvePlayerTurn(chimeTarget);
             }
@@ -452,7 +450,7 @@ public class CombatEngine
             throw new InvalidOperationException("Insufficient Energy.");
 
         ExecutePlayerSkill(anima, skill, explicitTarget);
-        _state.TurnIndex++;
+        AdvanceTurnOrConsumeSilentChime(anima);
     }
 
     // The explicit "Pass" action -- distinct from ChoosePlayerSkill returning null (RunRound's
@@ -463,6 +461,24 @@ public class CombatEngine
             throw new InvalidOperationException($"It is not {anima.DisplayName}'s turn.");
 
         Log($"{anima.DisplayName} passes.");
+        AdvanceTurnOrConsumeSilentChime(anima);
+    }
+
+    // Silent Chime's resumable-path equivalent of ActionPhase's own check (RunRound's synchronous
+    // path): if anima is this Round's pending Silent Chime target, consume it and leave TurnIndex
+    // unadvanced -- CurrentActor stays anima, so the client's next ResolvePlayerAction/
+    // ResolvePlayerPass call resolves the granted extra action instead of the next actor in
+    // TurnOrder. Otherwise, advance normally. Applies after either a played skill or a Pass, same
+    // as ActionPhase (Silent Chime doesn't care which the normal turn was).
+    private void AdvanceTurnOrConsumeSilentChime(Anima anima)
+    {
+        if (ReferenceEquals(_state.PendingSilentChimeTarget, anima) && anima.CurrentHp > 0)
+        {
+            _state.PendingSilentChimeTarget = null;
+            Log($"  Silent Chime grants {anima.DisplayName} an extra action!");
+            return;
+        }
+
         _state.TurnIndex++;
     }
 
