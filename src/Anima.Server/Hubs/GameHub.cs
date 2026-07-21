@@ -15,11 +15,11 @@ using AnimaUnit = Anima.Core.Models.Anima;
 
 namespace Anima.Server.Hubs;
 
-// Authenticated SignalR entry point. Sanctum/Collection, Weaving, Resource/Treasure/Shop, and now
-// the core Combat loop (Phase 5a -- StartCombat/SubmitAction/GetLegalTargets/GetCombatState) are
-// ported as of this session; Reforge stays deliberately deferred (0% map odds, unresolved open
-// items). Combat stops the moment a winner is determined -- Victory/Defeat rewards, DelveEndService,
-// Boss-hatch + Anima Reveal, and the Artifact win-count stat are all Phase 5b, not this one -- see
+// Authenticated SignalR entry point. Sanctum/Collection, Weaving, Resource/Treasure/Shop, and the
+// core Combat loop (Phase 5a) are ported, and Phase 5b (this session) closes out Victory/Defeat/
+// Retreat rewards, DelveEndService, Boss-hatch + Anima Reveal, and the Artifact win-count stat --
+// all directly inside SubmitAction's terminal-outcome handling, plus ConfirmBossHatch/
+// RetreatFromDelve. Reforge stays deliberately deferred (0% map odds, unresolved open items) -- see
 // CLAUDE.md's Server / Accounts / Auth section for the current real method-surface breakdown.
 [Authorize]
 public class GameHub(
@@ -29,7 +29,8 @@ public class GameHub(
     AccountRepository accountRepo,
     AccountArtifactStatRepository artifactStatsRepo,
     PendingWeaveRepository pendingWeaveRepo,
-    PendingPurchasedEmberRepository purchasedEmberRepo) : Hub
+    PendingPurchasedEmberRepository purchasedEmberRepo,
+    PendingBossHatchRepository pendingBossHatchRepo) : Hub
 {
     private Guid AccountId =>
         Guid.Parse(Context.User!.FindFirst(JwtTokenService.AccountIdClaimType)!.Value);
@@ -41,7 +42,7 @@ public class GameHub(
 
     public override async Task OnConnectedAsync()
     {
-        await sessions.CreateAsync(Context.ConnectionId, AccountId, Username, rosterRepo, ledgerRepo, accountRepo, pendingWeaveRepo);
+        await sessions.CreateAsync(Context.ConnectionId, AccountId, Username, rosterRepo, ledgerRepo, accountRepo, pendingWeaveRepo, pendingBossHatchRepo);
         await base.OnConnectedAsync();
     }
 
@@ -151,13 +152,20 @@ public class GameHub(
     private static PartGenomeSummary ToPartGenomeSummary(string part, PartGenome genome) =>
         new(part, ToSkillSummary(genome.Dominant), ToSkillSummary(genome.R1), ToSkillSummary(genome.R2));
 
-    private static WeaveGenomePreview ToPreview(WeavingResult result) =>
-        new(result.Genome.Color.ToString(), result.HybridTriggered,
+    private static WeaveGenomePreview ToPreview(WeavingResult result) => ToPreview(result.Genome, result.HybridTriggered);
+
+    // Shared by Weaving's Reveal preview (via the WeavingResult overload above) and Boss-hatch's --
+    // BossHatchService.Roll only ever returns a bare AnimaGenome (Boss-hatch has no HybridTriggered
+    // concept at all: hybrids are excluded entirely from Boss-hatch's body-color roll, see its own
+    // comment), so hybridTriggered defaults to false for that call site rather than being omitted
+    // from the shared WeaveGenomePreview shape.
+    private static WeaveGenomePreview ToPreview(AnimaGenome genome, bool hybridTriggered = false) =>
+        new(genome.Color.ToString(), hybridTriggered,
         [
-            ToPartGenomeSummary(nameof(Part.Head), result.Genome.Head),
-            ToPartGenomeSummary(nameof(Part.Frame), result.Genome.Frame),
-            ToPartGenomeSummary(nameof(Part.Tail), result.Genome.Tail),
-            ToPartGenomeSummary(nameof(Part.Crest), result.Genome.Crest),
+            ToPartGenomeSummary(nameof(Part.Head), genome.Head),
+            ToPartGenomeSummary(nameof(Part.Frame), genome.Frame),
+            ToPartGenomeSummary(nameof(Part.Tail), genome.Tail),
+            ToPartGenomeSummary(nameof(Part.Crest), genome.Crest),
         ]);
 
     // Runs the real Weave roll (and its Wisp/Echo Shard cost + WeaveCount charge) immediately --
@@ -268,6 +276,13 @@ public class GameHub(
     // gotcha).
     public Task<DelveStatus> StartDelve(StartDelveRequest request)
     {
+        // Same guard shape as AttemptWeave's "one pending at a time" rule -- a confirmed-but-unnamed
+        // Boss-hatch Anima is a real, already-granted-in-substance reward (see PendingBossHatch's
+        // own comment); starting a fresh Delve over it would leave it permanently unreachable
+        // (ConfirmBossHatch is the only thing that clears it), not just inconvenient to revisit.
+        if (Session.PendingBossHatch is not null)
+            throw new HubException("A Boss-hatch Anima is still pending a name -- confirm it before starting another Delve.");
+
         var team = request.TeamAnimaIds
             .Select(id => Session.Roster.FindById(id) ?? throw new HubException($"Anima {id} not found in this account's roster."))
             .ToList();
@@ -666,10 +681,18 @@ public class GameHub(
     // GetLegalTargets' set for that card (illegal target). Auto-resolves subsequent enemy turns
     // and Round transitions immediately afterward via AdvanceUntilPlayerActionNeeded, so the
     // response already reflects everything up to the next real player decision (or a terminal
-    // Victory/Defeat). On a terminal outcome: marks the node cleared and drops Session.
-    // ActiveCombat -- Phase 5b picks up from here (Wisp/Ember/Shard rewards, DelveEndService,
-    // Boss-hatch + Anima Reveal, the Artifact win-count stat) via whatever it adds next, not this
-    // method.
+    // Victory/Defeat). On a terminal outcome, rewards are resolved and granted INSIDE this same
+    // call (Phase 5b) -- same "no separate claim step, no double-claim window" pattern every other
+    // node-resolution method (CollectResourceNode/ClaimTreasureNode) already uses:
+    // - Victory (Combat/Elite): Wisp/Ember/Vessel-Shard granted via GrantNonBossVictoryRewardAsync,
+    //   surfaced on CombatStatus.VictoryReward.
+    // - Victory (Boss): Wisp/Echo-Shard granted, the Artifact win-count stat bumped for every
+    //   currently-held Artifact, and the guaranteed hatched Anima rolled (not yet materialized --
+    //   see GrantBossVictoryRewardAsync/ConfirmBossHatch) via GrantBossVictoryRewardAsync, surfaced
+    //   on VictoryReward + BossHatchPreview. The whole Delve ends here (Session.ActiveDelveRun is
+    //   cleared) -- Boss is the map's terminal node, nothing left to visit past it.
+    // - Defeat: DelveEndService.ResolveDefeat's 50%-Wisp-kept math, surfaced on DefeatSummary. The
+    //   Delve also ends here.
     public async Task<CombatStatus> SubmitAction(SubmitActionRequest request)
     {
         var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
@@ -713,13 +736,163 @@ public class GameHub(
 
         foreach (var member in run.Team) await rosterRepo.SaveAnimaAsync(AccountId, member);
 
-        if (outcome != CombatOutcome.InProgress)
+        CombatVictoryReward? victoryReward = null;
+        WeaveGenomePreview? bossHatchPreview = null;
+        DelveEndSummary? defeatSummary = null;
+
+        switch (outcome)
         {
-            run.MarkCurrentNodeCleared();
-            Session.ActiveCombat = null;
+            case CombatOutcome.Victory:
+            {
+                // StartCombat already required the current node to be Combat/Elite/Boss, so Type
+                // is guaranteed set here.
+                var nodeType = run.CurrentNode!.Type!.Value;
+                if (nodeType == MapNodeType.Boss)
+                {
+                    var (reward, preview) = await GrantBossVictoryRewardAsync(run);
+                    victoryReward = reward;
+                    bossHatchPreview = preview;
+                }
+                else
+                {
+                    victoryReward = await GrantNonBossVictoryRewardAsync(run, nodeType);
+                }
+
+                run.MarkCurrentNodeCleared();
+                Session.ActiveCombat = null;
+                // Boss is the map's terminal node -- nothing left to visit past it, so the Delve
+                // itself ends here too (unlike a Combat/Elite Victory, which just clears the node
+                // and lets the player keep moving through the same DelveRun).
+                if (nodeType == MapNodeType.Boss) Session.ActiveDelveRun = null;
+                break;
+            }
+            case CombatOutcome.Defeat:
+            {
+                // Captured BEFORE MarkCurrentNodeCleared below, so the summary reports nodes
+                // actually cleared before the fatal fight, not counting the one that ended the run.
+                var nodesClearedBeforeThis = run.ClearedNodes.Count;
+                var floorIndexReached = run.CurrentNode?.FloorIndex ?? 0;
+
+                var result = DelveEndService.ResolveDefeat(Session.Ledger, run.RunLedger);
+                await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+
+                defeatSummary = new DelveEndSummary(result.WispEarnedThisRun, result.WispKept, result.WispForfeited, floorIndexReached, nodesClearedBeforeThis);
+
+                run.MarkCurrentNodeCleared();
+                Session.ActiveCombat = null;
+                Session.ActiveDelveRun = null;
+                break;
+            }
         }
 
-        return BuildCombatStatus(state, log);
+        return BuildCombatStatus(state, log, victoryReward, bossHatchPreview, defeatSummary);
+    }
+
+    // Combat/Elite Victory's reward grant -- Wisp (Wisp Charm-adjusted, applied inside
+    // RewardService itself) + Ember drop(s) queued for the same pickup-choice flow every other
+    // Ember drop uses (Resource/Treasure/Shop), + Elite's independent 25% Vessel Shard chance.
+    // Diffs the ledger before/after (same pattern CollectResourceNode already uses for its own
+    // WispGranted) since RewardService grants straight into the ledger rather than returning
+    // amounts granted.
+    private async Task<CombatVictoryReward> GrantNonBossVictoryRewardAsync(DelveRun run, MapNodeType nodeType)
+    {
+        var wispBefore = Session.Ledger.GetBalance(ResourceType.Wisp);
+        var vesselShardBefore = Session.Ledger.GetBalance(ResourceType.VesselShard);
+
+        var emberDrops = nodeType == MapNodeType.Elite
+            ? RewardService.GrantEliteWin(Session.Ledger, Random.Shared, run.RunLedger)
+            : RewardService.GrantCombatWin(Session.Ledger, Random.Shared, run.RunLedger);
+
+        var wispGranted = Session.Ledger.GetBalance(ResourceType.Wisp) - wispBefore;
+        var vesselShardGranted = Session.Ledger.GetBalance(ResourceType.VesselShard) > vesselShardBefore;
+
+        await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+        foreach (var color in emberDrops) Session.PendingEmbers.Enqueue(color);
+
+        return new CombatVictoryReward(wispGranted, vesselShardGranted, false, await GetPendingEmberColorsAsync());
+    }
+
+    // Boss Victory's reward grant: Wisp (300, Wisp Charm-adjusted) + a guaranteed Echo Shard via
+    // RewardService.GrantBossWin -- no Ember (confirmed by reading GrantBossWin itself: Boss's
+    // reward tier doesn't include one, unlike Combat/Elite/Resource) -- plus the guaranteed hatched
+    // Anima via BossHatchService.Roll. The genome is stashed as a DB-backed PendingBossHatch (NOT
+    // materialized into SanctumRoster yet) until ConfirmBossHatch supplies the mandatory name --
+    // same "granted/won, not yet resolved" treatment PendingWeave already gets for an AttemptWeave
+    // roll, see PendingBossHatch's own comment for why. Also bumps the Artifact win-count stat
+    // (AccountArtifactStatEntity.DelvesWonWithCount) for every Artifact currently held -- the write
+    // path that entity's own comment flagged as blocked since Phase 1, pending Boss-victory
+    // resolution.
+    private async Task<(CombatVictoryReward Reward, WeaveGenomePreview Preview)> GrantBossVictoryRewardAsync(DelveRun run)
+    {
+        var wispBefore = Session.Ledger.GetBalance(ResourceType.Wisp);
+        var echoShardBefore = Session.Ledger.GetBalance(ResourceType.EchoShard);
+
+        RewardService.GrantBossWin(Session.Ledger, Random.Shared, run.RunLedger);
+
+        var wispGranted = Session.Ledger.GetBalance(ResourceType.Wisp) - wispBefore;
+        var echoShardGranted = Session.Ledger.GetBalance(ResourceType.EchoShard) > echoShardBefore;
+
+        var genome = BossHatchService.Roll(Random.Shared);
+        Session.PendingBossHatch = new PendingBossHatch { Genome = genome };
+        await pendingBossHatchRepo.SaveAsync(AccountId, Session.PendingBossHatch);
+        await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+
+        foreach (var artifact in run.RunLedger.Artifacts)
+        {
+            await artifactStatsRepo.RecordWinAsync(AccountId, artifact.Name);
+        }
+
+        var reward = new CombatVictoryReward(wispGranted, false, echoShardGranted, await GetPendingEmberColorsAsync());
+        return (reward, ToPreview(genome));
+    }
+
+    // The mandatory naming step for a Boss Victory's guaranteed hatched Anima -- mirrors
+    // ConfirmWeave exactly (see its own comment): materializes via AnimaMaterializationService only
+    // now, adds to SanctumRoster, persists, and clears the pending row. No "Twin" concept here --
+    // Boss-hatch always produces exactly one Anima, unlike a Weave's Echo Twin possibility.
+    public async Task<AnimaSummary> ConfirmBossHatch(ConfirmBossHatchRequest request)
+    {
+        var pending = Session.PendingBossHatch ?? throw new HubException("No pending Boss-hatch Anima to confirm.");
+        if (string.IsNullOrWhiteSpace(request.Name)) throw new HubException("A name is required.");
+
+        var anima = AnimaMaterializationService.Create(pending.Genome, request.Name, Session.Roster);
+        await rosterRepo.SaveAnimaAsync(AccountId, anima);
+
+        Session.PendingBossHatch = null;
+        await pendingBossHatchRepo.DeleteAsync(AccountId);
+
+        return ToSummary(anima);
+    }
+
+    // Reconnect support, same spirit as GetPendingWeave -- lets a client that just reconnected
+    // re-render the Anima Reveal screen for a Boss-hatch that already resolved (and was already
+    // granted) before the disconnect. Null when nothing is pending.
+    public Task<WeaveGenomePreview?> GetPendingBossHatch()
+    {
+        var pending = Session.PendingBossHatch;
+        return Task.FromResult(pending is null ? null : ToPreview(pending.Genome));
+    }
+
+    // Voluntary mid-run exit, per the Match Result & Retreat System's locked design: 0% Wisp
+    // penalty (100% of this-run Wisp kept, unlike a Defeat's 50%) -- Artifacts are still lost
+    // (run-only state, same as Defeat; nothing to do here since RunLedger is simply discarded along
+    // with the rest of DelveRun). Only valid standing on the map between nodes: rejects if
+    // mid-combat (Session.ActiveCombat set) -- there's deliberately no other "mid-node" state to
+    // guard against today, since every other node type (Resource/Treasure/Shop) resolves atomically
+    // in one call and leaves nothing lingering to be "inside" of.
+    public Task<DelveEndSummary> RetreatFromDelve()
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        if (Session.ActiveCombat is not null)
+            throw new HubException("Cannot Retreat while a Combat is in progress.");
+
+        var nodesCleared = run.ClearedNodes.Count;
+        var floorIndexReached = run.CurrentNode?.FloorIndex ?? 0;
+        var result = DelveEndService.ResolveRetreat(Session.Ledger, run.RunLedger);
+
+        Session.ActiveDelveRun = null;
+
+        return Task.FromResult(new DelveEndSummary(result.WispEarnedThisRun, result.WispKept, result.WispForfeited, floorIndexReached, nodesCleared));
     }
 
     private static ICombatant ResolveCombatantRef(CombatState state, CombatantRef reference)
@@ -743,7 +916,12 @@ public class GameHub(
         return new CombatantRef("Enemy", enemyIndex);
     }
 
-    private static CombatStatus BuildCombatStatus(CombatState state, IReadOnlyList<string>? log = null)
+    private static CombatStatus BuildCombatStatus(
+        CombatState state,
+        IReadOnlyList<string>? log = null,
+        CombatVictoryReward? victoryReward = null,
+        WeaveGenomePreview? bossHatchPreview = null,
+        DelveEndSummary? defeatSummary = null)
     {
         CombatantSummary ToSummary(string side, int index, ICombatant c) => new(
             side, index, c.DisplayName, c.CurrentHp, c.MaxHp, c.Position, c.CurrentHp > 0,
@@ -768,7 +946,8 @@ public class GameHub(
         return new CombatStatus(
             state.RoundNumber, state.SharedEnergy, playerSummaries, enemySummaries, hand,
             state.DrawPile.Count, state.DiscardPile.Count, turnOrder, state.TurnIndex,
-            currentActor?.Id, outcome.ToString(), log ?? Array.Empty<string>());
+            currentActor?.Id, outcome.ToString(), log ?? Array.Empty<string>(),
+            victoryReward, bossHatchPreview, defeatSummary);
     }
 
     private static CombatTurnEntry ToTurnEntry(CombatState state, ICombatant combatant)

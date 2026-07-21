@@ -38,4 +38,34 @@ public class AccountArtifactStatRepository(AnimaDbContext db, AccountLockRegistr
 
         await db.SaveChangesAsync(ct);
     }
+
+    // The "won a Delve while held" write path (Phase 5b) -- called once per currently-held Artifact
+    // on a confirmed Boss Victory (see GameHub.SubmitAction's Boss branch). Upserts rather than
+    // assuming a row already exists: in practice every held Artifact was already granted via
+    // ArtifactService.Grant, which always runs through RecordDiscoveryAsync first (Treasure/Shop),
+    // so a row should always be there by the time this runs -- but upserting costs nothing extra
+    // and avoids a foreign-key-shaped assumption if some future grant path ever skips discovery.
+    public async Task RecordWinAsync(Guid accountId, string artifactName, CancellationToken ct = default)
+    {
+        await using var _ = await locks.AcquireAsync(accountId, ct);
+
+        var row = await db.ArtifactStats.SingleOrDefaultAsync(s => s.AccountId == accountId && s.ArtifactName == artifactName, ct);
+        if (row is null)
+        {
+            db.ArtifactStats.Add(new AccountArtifactStatEntity
+            {
+                Id = Guid.NewGuid(),
+                AccountId = accountId,
+                ArtifactName = artifactName,
+                FirstDiscoveredAtUtc = DateTime.UtcNow,
+                DelvesWonWithCount = 1,
+            });
+        }
+        else
+        {
+            row.DelvesWonWithCount++;
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
 }

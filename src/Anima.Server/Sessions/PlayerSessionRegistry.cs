@@ -28,12 +28,14 @@ public sealed class PlayerSessionRegistry
         PersistentLedgerRepository ledgerRepo,
         AccountRepository accountRepo,
         PendingWeaveRepository pendingWeaveRepo,
+        PendingBossHatchRepository pendingBossHatchRepo,
         CancellationToken ct = default)
     {
         var roster = await rosterRepo.LoadAsync(accountId, ct);
         var ledger = await ledgerRepo.LoadAsync(accountId, ct);
         var team = await accountRepo.LoadTeamAsync(accountId, ct);
         var pendingWeave = await pendingWeaveRepo.LoadAsync(accountId, ct);
+        var pendingBossHatch = await pendingBossHatchRepo.LoadAsync(accountId, ct);
 
         var session = new PlayerSession
         {
@@ -43,6 +45,7 @@ public sealed class PlayerSessionRegistry
             Ledger = ledger,
             TeamAnimaIds = team.ToList(),
             PendingWeave = pendingWeave,
+            PendingBossHatch = pendingBossHatch,
         };
 
         _sessions[connectionId] = session;

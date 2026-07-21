@@ -12,6 +12,7 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
     public DbSet<AccountArtifactStatEntity> ArtifactStats => Set<AccountArtifactStatEntity>();
     public DbSet<PendingWeaveEntity> PendingWeaves => Set<PendingWeaveEntity>();
     public DbSet<PendingPurchasedEmberEntity> PendingPurchasedEmbers => Set<PendingPurchasedEmberEntity>();
+    public DbSet<PendingBossHatchEntity> PendingBossHatches => Set<PendingBossHatchEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -56,6 +57,12 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
         {
             e.HasIndex(w => w.AccountId);
             e.Property(w => w.Version).IsConcurrencyToken();
+        });
+
+        modelBuilder.Entity<PendingBossHatchEntity>(e =>
+        {
+            e.HasIndex(h => h.AccountId).IsUnique();
+            e.Property(h => h.Version).IsConcurrencyToken();
         });
     }
 

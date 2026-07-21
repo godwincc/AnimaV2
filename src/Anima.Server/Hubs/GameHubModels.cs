@@ -127,11 +127,19 @@ public record HandCardSummary(int HandIndex, string OwnerAnimaId, string SkillNa
 
 public record CombatTurnEntry(string Side, int Index, string Name);
 
-// Outcome is "InProgress" | "Victory" | "Defeat" -- Phase 5b (rewards, DelveEndService, Boss-hatch,
-// Anima Reveal) picks up from here once Outcome stops being "InProgress"; this phase stops the
-// moment a winner is determined, per its own scope. CurrentActorAnimaId is null once Outcome is
+// Outcome is "InProgress" | "Victory" | "Defeat". CurrentActorAnimaId is null once Outcome is
 // terminal (nobody's turn anymore) -- while InProgress it's always set, since
 // AdvanceUntilPlayerActionNeeded only ever pauses on a living player Anima's turn.
+//
+// The last three fields are Phase 5b's addition, all null except on the exact SubmitAction call
+// that first reaches a terminal outcome (never on StartCombat/GetCombatState/GetLegalTargets,
+// and never on an InProgress result) -- kept on this one shared shape rather than a bespoke
+// "terminal result" wrapper so the client doesn't need a different response type depending on
+// whether the fight happened to end this call:
+// - VictoryReward: set for a Combat/Elite/Boss Victory. Boss additionally sets BossHatchPreview.
+// - BossHatchPreview: set only for a Boss Victory -- the just-rolled, not-yet-named genome for the
+//   Anima Reveal screen; ConfirmBossHatch (mirroring ConfirmWeave) supplies the mandatory name.
+// - DefeatSummary: set only for a Defeat (a wipe) -- the 50%-Wisp-kept "Delve Ended" summary.
 public record CombatStatus(
     int RoundNumber,
     int SharedEnergy,
@@ -144,11 +152,35 @@ public record CombatStatus(
     int TurnIndex,
     string? CurrentActorAnimaId,
     string Outcome,
-    IReadOnlyList<string> EventLog);
+    IReadOnlyList<string> EventLog,
+    CombatVictoryReward? VictoryReward = null,
+    WeaveGenomePreview? BossHatchPreview = null,
+    DelveEndSummary? DefeatSummary = null);
 
 // HandIndex null = Pass. Target must be one of GetLegalTargets(HandIndex)'s entries, or null if
 // that set came back empty (SelfTarget/AllAllies/AllEnemies skills need no explicit target).
 public record SubmitActionRequest(string AnimaId, int? HandIndex, CombatantRef? Target);
+
+// ---- Combat rewards / Delve end (Phase 5b) ----
+
+// The economic side of a Combat/Elite/Boss Victory -- Wisp/Ember/Shard grants all share this one
+// shape rather than three bespoke ones, matching DelveEndResult/ShopStockSnapshot's own "one
+// shared DTO" convention. VesselShardGranted is only ever true for an Elite Victory (25% chance);
+// EchoShardGranted is only ever true for a Boss Victory (guaranteed). PendingEmberColors is the
+// account's FULL current queue, same convention CollectResourceResult/ClaimTreasureResult use.
+public record CombatVictoryReward(int WispGranted, bool VesselShardGranted, bool EchoShardGranted, IReadOnlyList<string> PendingEmberColors);
+
+// Wisp math mirrors Anima.Core.Economy.DelveEndService.DelveEndResult exactly (WispForfeited is
+// always 0 for a Retreat, per its 100%-keep design) -- FloorIndexReached/NodesCleared add the
+// map-progress half of the locked "Delve Ended"/"Delve Retreated" result-screen summary (CLAUDE.md's
+// Match Result & Retreat System). FloorIndexReached is 0-indexed, same convention NodeRef.FloorIndex
+// already uses; a client displaying "Floor 6" adds 1 itself, same as it already must for NodeRef.
+public record DelveEndSummary(int WispEarnedThisRun, int WispKept, int WispForfeited, int FloorIndexReached, int NodesCleared);
+
+// The mandatory naming step for a Boss Victory's guaranteed hatched Anima -- mirrors
+// ConfirmWeaveRequest, but Boss-hatch only ever produces one Anima (no Echo-Twin-style pair), so
+// this needs no second name field.
+public record ConfirmBossHatchRequest(string Name);
 
 public record AnimaDetail(
     string Id,

@@ -11,12 +11,10 @@ namespace Anima.Server.Data.Entities;
 // by-name identity the rest of the Artifact system already uses (see SampleArtifacts' own
 // comment) -- there is no separate Artifact Id today.
 //
-// NOTE (scope): only the read side (AccountArtifactStatRepository.LoadAsync) is wired up in this
-// pass. Nothing yet calls a write path to set FirstDiscoveredAtUtc (on Artifact pickup) or
-// increment DelvesWonWithCount (on Boss Victory while held) -- those call sites live in
-// Treasure/Shop pickup and Boss-victory resolution, none of which are ported onto GameHub yet
-// (see CLAUDE.md's Known TODOs). Every account's Collection reads as "0 of 12 discovered" until
-// that follow-up work lands.
+// Both write paths are now real: FirstDiscoveredAtUtc is set by RecordDiscoveryAsync (Treasure/
+// Shop pickup, wired in an earlier session), and DelvesWonWithCount is incremented by
+// RecordWinAsync, called once per currently-held Artifact on a confirmed Boss Victory
+// (GameHub.SubmitAction's Boss branch, Phase 5b).
 public class AccountArtifactStatEntity : IConcurrencyStamped
 {
     public Guid Id { get; set; }

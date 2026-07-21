@@ -39,6 +39,13 @@ public sealed class PlayerSession
     // PlayerSessionRegistry.CreateAsync on every (re)connect, so ConfirmWeave stays resumable.
     public PendingWeave? PendingWeave { get; set; }
 
+    // DB-backed (see PendingBossHatchEntity/PendingBossHatchRepository) -- same treatment as
+    // PendingWeave above and for the same reason: a Boss Victory's guaranteed hatched Anima is
+    // already-granted-in-substance (the fight is won) the instant it's rolled, so losing the
+    // unresolved genome to a dropped connection before ConfirmBossHatch names it would be a real,
+    // one-per-Boss-clear loss. Reloaded by PlayerSessionRegistry.CreateAsync on every (re)connect.
+    public PendingBossHatch? PendingBossHatch { get; set; }
+
     // Deliberately in-memory only, tied to this session/connection -- NOT the same fix as
     // PendingWeave above, and ONLY for FREE (node-dropped) Ember -- a purchased one is a real,
     // paid-for pending outcome and gets PendingPurchasedEmberEntity's DB-backed treatment instead
