@@ -1,0 +1,288 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/hub.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/icon_glyph.gd" id="2"]
+[ext_resource type="PackedScene" path="res://scenes/delve_portal.tscn" id="3"]
+
+[node name="HubScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 28
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 28
+theme_override_constants/margin_bottom = 24
+
+[node name="Content" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="StatusLabel" type="Label" parent="Margin/Content"]
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
+text = ""
+
+[node name="HeaderRow" type="HBoxContainer" parent="Margin/Content"]
+layout_mode = 2
+
+[node name="WelcomeBox" type="VBoxContainer" parent="Margin/Content/HeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 2
+
+[node name="WelcomeLabel" type="Label" parent="Margin/Content/HeaderRow/WelcomeBox"]
+layout_mode = 2
+text = "Welcome back"
+
+[node name="SubtitleLabel" type="Label" parent="Margin/Content/HeaderRow/WelcomeBox"]
+layout_mode = 2
+text = "0 animas in your roster"
+
+[node name="ResourceBar" type="HBoxContainer" parent="Margin/Content/HeaderRow"]
+layout_mode = 2
+alignment = 2
+theme_override_constants/separation = 14
+
+[node name="WispBox" type="HBoxContainer" parent="Margin/Content/HeaderRow/ResourceBar"]
+layout_mode = 2
+theme_override_constants/separation = 5
+
+[node name="WispIcon" type="Control" parent="Margin/Content/HeaderRow/ResourceBar/WispBox"]
+layout_mode = 2
+script = ExtResource("2")
+icon_kind = "sparkle"
+icon_color = Color(0.909804, 0.627451, 0.227451, 1)
+icon_size = 15.0
+
+[node name="WispLabel" type="Label" parent="Margin/Content/HeaderRow/ResourceBar/WispBox"]
+layout_mode = 2
+text = "0"
+
+[node name="EchoBox" type="HBoxContainer" parent="Margin/Content/HeaderRow/ResourceBar"]
+layout_mode = 2
+theme_override_constants/separation = 5
+
+[node name="EchoDot" type="ColorRect" parent="Margin/Content/HeaderRow/ResourceBar/EchoBox"]
+custom_minimum_size = Vector2(9, 9)
+layout_mode = 2
+size_flags_vertical = 4
+color = Color(0.768627, 0.258824, 0.227451, 1)
+
+[node name="EchoLabel" type="Label" parent="Margin/Content/HeaderRow/ResourceBar/EchoBox"]
+layout_mode = 2
+text = "0"
+
+[node name="VesselBox" type="HBoxContainer" parent="Margin/Content/HeaderRow/ResourceBar"]
+layout_mode = 2
+theme_override_constants/separation = 5
+
+[node name="VesselDot" type="ColorRect" parent="Margin/Content/HeaderRow/ResourceBar/VesselBox"]
+custom_minimum_size = Vector2(9, 9)
+layout_mode = 2
+size_flags_vertical = 4
+color = Color(0.227451, 0.54902, 0.290196, 1)
+
+[node name="VesselLabel" type="Label" parent="Margin/Content/HeaderRow/ResourceBar/VesselBox"]
+layout_mode = 2
+text = "0"
+
+[node name="DestinationGrid" type="HBoxContainer" parent="Margin/Content"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="SanctumCard" type="Button" parent="Margin/Content/DestinationGrid"]
+custom_minimum_size = Vector2(0, 140)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 0
+focus_mode = 0
+text = ""
+
+[node name="CardMargin" type="MarginContainer" parent="Margin/Content/DestinationGrid/SanctumCard"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 14
+
+[node name="CardContent" type="VBoxContainer" parent="Margin/Content/DestinationGrid/SanctumCard/CardMargin"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 0
+theme_override_constants/separation = 6
+
+[node name="Icon" type="Control" parent="Margin/Content/DestinationGrid/SanctumCard/CardMargin/CardContent"]
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("2")
+icon_kind = "home"
+icon_color = Color(0.909804, 0.627451, 0.227451, 1)
+icon_size = 32.0
+
+[node name="NameLabel" type="Label" parent="Margin/Content/DestinationGrid/SanctumCard/CardMargin/CardContent"]
+layout_mode = 2
+mouse_filter = 2
+text = "Sanctum"
+
+[node name="DescLabel" type="Label" parent="Margin/Content/DestinationGrid/SanctumCard/CardMargin/CardContent"]
+layout_mode = 2
+mouse_filter = 2
+autowrap_mode = 3
+text = "View your animas and build your team"
+
+[node name="WeavingCard" type="Button" parent="Margin/Content/DestinationGrid"]
+custom_minimum_size = Vector2(0, 140)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 0
+focus_mode = 0
+text = ""
+
+[node name="CardMargin" type="MarginContainer" parent="Margin/Content/DestinationGrid/WeavingCard"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 14
+
+[node name="CardContent" type="VBoxContainer" parent="Margin/Content/DestinationGrid/WeavingCard/CardMargin"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 0
+theme_override_constants/separation = 6
+
+[node name="Icon" type="Control" parent="Margin/Content/DestinationGrid/WeavingCard/CardMargin/CardContent"]
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("2")
+icon_kind = "flask"
+icon_color = Color(0.909804, 0.627451, 0.227451, 1)
+icon_size = 32.0
+
+[node name="NameLabel" type="Label" parent="Margin/Content/DestinationGrid/WeavingCard/CardMargin/CardContent"]
+layout_mode = 2
+mouse_filter = 2
+text = "Weaving"
+
+[node name="DescLabel" type="Label" parent="Margin/Content/DestinationGrid/WeavingCard/CardMargin/CardContent"]
+layout_mode = 2
+mouse_filter = 2
+autowrap_mode = 3
+text = "Breed new animas from your roster"
+
+[node name="CollectionCard" type="Button" parent="Margin/Content/DestinationGrid"]
+custom_minimum_size = Vector2(0, 140)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 0
+focus_mode = 0
+text = ""
+
+[node name="CardMargin" type="MarginContainer" parent="Margin/Content/DestinationGrid/CollectionCard"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 14
+
+[node name="CardContent" type="VBoxContainer" parent="Margin/Content/DestinationGrid/CollectionCard/CardMargin"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 0
+theme_override_constants/separation = 6
+
+[node name="Icon" type="Control" parent="Margin/Content/DestinationGrid/CollectionCard/CardMargin/CardContent"]
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("2")
+icon_kind = "archive"
+icon_color = Color(0.909804, 0.627451, 0.227451, 1)
+icon_size = 32.0
+
+[node name="NameLabel" type="Label" parent="Margin/Content/DestinationGrid/CollectionCard/CardMargin/CardContent"]
+layout_mode = 2
+mouse_filter = 2
+text = "Collection"
+
+[node name="DescLabel" type="Label" parent="Margin/Content/DestinationGrid/CollectionCard/CardMargin/CardContent"]
+layout_mode = 2
+mouse_filter = 2
+autowrap_mode = 3
+text = "Resources and artifacts you've earned"
+
+[node name="TeamPortalRow" type="HBoxContainer" parent="Margin/Content"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="TeamRow" type="HBoxContainer" parent="Margin/Content/TeamPortalRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
+
+[node name="DelvePortal" parent="Margin/Content/TeamPortalRow" instance=ExtResource("3")]
+layout_mode = 2
+
+[node name="LastDelveBar" type="PanelContainer" parent="Margin/Content"]
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="Margin/Content/LastDelveBar"]
+layout_mode = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 8
+
+[node name="Content" type="VBoxContainer" parent="Margin/Content/LastDelveBar/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="LastDelveLabel" type="Label" parent="Margin/Content/LastDelveBar/Margin/Content"]
+layout_mode = 2
+text = "Last delve"
+
+[node name="LastDelveText" type="Label" parent="Margin/Content/LastDelveBar/Margin/Content"]
+layout_mode = 2
+autowrap_mode = 3
+text = ""
