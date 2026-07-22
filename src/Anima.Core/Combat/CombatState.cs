@@ -35,12 +35,4 @@ public class CombatState
     // The combatant whose turn it currently is, under the resumable model -- null once TurnIndex
     // runs off the end (a Round just finished, or combat is over and nobody has re-rolled yet).
     public ICombatant? CurrentActor => TurnIndex >= 0 && TurnIndex < TurnOrder.Count ? TurnOrder[TurnIndex] : null;
-
-    // Silent Chime: set by CombatEngine.TryActivateSilentChime, consumed the moment the targeted
-    // Anima's normal turn resolves this Round -- see both for the full mechanic. Moved here from a
-    // private CombatEngine instance field for the same reason TurnOrder was: it must survive a
-    // fresh CombatEngine being reconstructed per hub call (GameHub.SubmitAction's pattern), or an
-    // activation made on one hub call would silently vanish before the extra action could fire on
-    // the next.
-    public Anima? PendingSilentChimeTarget { get; set; }
 }

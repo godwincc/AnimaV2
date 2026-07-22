@@ -575,7 +575,7 @@ var multiCombatEnemyA = SampleEnemies.CreateGrovehide();
 multiCombatEnemyA.CurrentHp = 0;
 var multiCombatStateA = new CombatState { PlayerTeam = multiCombatTeam, EnemyTeam = [multiCombatEnemyA] };
 var multiCombatLogA = new List<string>();
-var (multiCombatWonA, _, _) = RunDelveFight(multiCombatStateA, new List<Artifact>(), multiCombatRun.RunLedger, multiCombatLogA, multiCombatRun);
+var (multiCombatWonA, _, _) = RunDelveFight(multiCombatStateA, new List<Artifact>(), multiCombatLogA, multiCombatRun);
 var multiCombatDeckAPass = multiCombatWonA && DeckHasOverrideAndNotOriginal(multiCombatStateA);
 
 // Combat B: a SECOND, entirely separate CombatState/CombatEngine (same DelveRun, same team) --
@@ -585,7 +585,7 @@ var multiCombatEnemyB = SampleEnemies.CreateQuillfang();
 multiCombatEnemyB.CurrentHp = 0;
 var multiCombatStateB = new CombatState { PlayerTeam = multiCombatTeam, EnemyTeam = [multiCombatEnemyB] };
 var multiCombatLogB = new List<string>();
-var (multiCombatWonB, _, _) = RunDelveFight(multiCombatStateB, new List<Artifact>(), multiCombatRun.RunLedger, multiCombatLogB, multiCombatRun);
+var (multiCombatWonB, _, _) = RunDelveFight(multiCombatStateB, new List<Artifact>(), multiCombatLogB, multiCombatRun);
 var multiCombatDeckBPass = multiCombatWonB && DeckHasOverrideAndNotOriginal(multiCombatStateB);
 
 var multiCombatOverallPass = multiCombatAccepted && multiCombatDeckAPass && multiCombatDeckBPass;
@@ -1185,33 +1185,88 @@ for (var i = 0; i < 4; i++) focusingLensEngine2.RunRound();
 var focusingLensResetPass = focusingLensTriggers2.SequenceEqual(new[] { 4 });
 Console.WriteLine($"  [{(focusingLensResetPass ? "PASS" : "FAIL")}] Focusing Lens's counter resets in a fresh combat (2nd fight's own attack #4 triggers again, observed: {string.Join(",", focusingLensTriggers2)})");
 
-// ---- Silent Chime: grants exactly one extra action, then is used up for the rest of the Delve ----
-var silentChimeRunLedger = new RunLedger();
-silentChimeRunLedger.Artifacts.Add(SampleArtifacts.CreateSilentChime());
+// ---- Silent Chime (REDESIGNED -- fully automatic, no player action/targeting at all): the first
+// time ANY enemy would trigger Enrage in a Delve where Silent Chime is held, that activation is
+// cancelled entirely and the Artifact is consumed. A passive, huge-HP, no-attacks dummy
+// (MakeTankyDummy's own pattern) is reused so nobody dies mid-test and RunRound() can be called
+// repeatedly to observe Enrage state across several Rounds. ----
+Enemy MakeEnrageTestDummy(int enrageRound) => new()
+{
+    Name = "EnrageTestDummy", MaxHp = 500, Defense = 0, CurrentHp = 500, Position = 1, Speed = 1,
+    BehaviorRules = [], EnrageRound = enrageRound,
+};
 
+// Test A: cancels the first activation entirely, THEN the SAME enemy re-attempts and enrages for
+// real the very next Round, since IsEnraged was deliberately left false and the charge is now gone
+// -- the exact "same enemy re-triggering" case flagged as worth checking.
+var chimeMap = MapGenerator.Generate(new Random(9001));
 var chimeAnima = MakeArtifactTestAnima("SilentChimeTester", MakeFocusingLensAttack(), MakeFocusingLensAttack(), MakeFocusingLensAttack());
-var chimeActionsPlayed = 0;
-var chimeState = new CombatState { PlayerTeam = [chimeAnima], EnemyTeam = [MakeTankyDummy()] };
-var chimeEngine = new CombatEngine(chimeState);
-chimeEngine.ChoosePlayerSkill = (a, s) => { chimeActionsPlayed++; return s.Hand.FirstOrDefault(); };
+var chimePersistentLedger = new PersistentLedger();
+var chimeRun = DelveRun.Start(chimeMap, new List<AnimaUnit> { chimeAnima }, chimePersistentLedger);
+chimeRun.RunLedger.Artifacts.Add(SampleArtifacts.CreateSilentChime());
+
+var chimeEnemy = MakeEnrageTestDummy(enrageRound: 1);
+var chimeState = new CombatState { PlayerTeam = [chimeAnima], EnemyTeam = [chimeEnemy] };
+var chimeLog = new List<string>();
+var chimeEngine = new CombatEngine(chimeState, chimeRun.RunLedger.Artifacts, chimeRun);
+chimeEngine.ChoosePlayerSkill = (a, s) => null; // fully passive -- this test is about Enrage, not combat resolution
+chimeEngine.OnLog = line => chimeLog.Add(line);
 chimeEngine.StartCombat();
 
-var chimeActivated = chimeEngine.TryActivateSilentChime(chimeAnima, silentChimeRunLedger);
-chimeEngine.RunRound(); // chimeAnima should act TWICE this Round: its normal turn + the Silent Chime extra action
-var chimeActionsAfterActivatedRound = chimeActionsPlayed;
-var chimeStillOwnedAfterUse = silentChimeRunLedger.Artifacts.Any(a => a.Name == "Silent Chime");
+chimeEngine.RunRound(); // Round 1: EnrageRound reached -- should be cancelled by Silent Chime instead of applying
+var chimeCancelledPass = !chimeEnemy.IsEnraged
+    && !chimeRun.CurrentArtifacts.Any(a => a.Name == "Silent Chime") // consumed immediately, same call
+    && chimeLog.Any(l => l.Contains("Silent Chime shatters"));
+Console.WriteLine($"  [{(chimeCancelledPass ? "PASS" : "FAIL")}] Silent Chime cancels the first Enrage activation entirely (enemy stays un-enraged: {!chimeEnemy.IsEnraged}) and is consumed immediately (still held: {chimeRun.CurrentArtifacts.Any(a => a.Name == "Silent Chime")})");
 
-var chimeSecondActivationAttempt = chimeEngine.TryActivateSilentChime(chimeAnima, silentChimeRunLedger); // already used -- should fail
-chimeEngine.RunRound();
-var chimeActionsAfterSecondRound = chimeActionsPlayed;
+chimeEngine.RunRound(); // Round 2: same enemy re-attempts -- charge already spent, so it enrages for real this time
+var chimeReTriggerPass = chimeEnemy.IsEnraged && chimeEnemy.EnrageTriggeredRound == 2;
+Console.WriteLine($"  [{(chimeReTriggerPass ? "PASS" : "FAIL")}] The same enemy re-attempts Enrage the very next Round once the charge is spent, and it applies normally this time (IsEnraged={chimeEnemy.IsEnraged}, triggered Round {chimeEnemy.EnrageTriggeredRound})");
 
-var chimeGrantedExtraPass = chimeActivated && chimeActionsAfterActivatedRound == 2;
-var chimeConsumedPass = !chimeStillOwnedAfterUse;
-var chimeSingleUsePass = !chimeSecondActivationAttempt && (chimeActionsAfterSecondRound - chimeActionsAfterActivatedRound) == 1;
+// Test B: baseline sanity -- without Silent Chime, Enrage triggers normally, no cancellation.
+var noChimeAnima = MakeArtifactTestAnima("NoSilentChimeTester", MakeFocusingLensAttack(), MakeFocusingLensAttack(), MakeFocusingLensAttack());
+var noChimeEnemy = MakeEnrageTestDummy(enrageRound: 1);
+var noChimeState = new CombatState { PlayerTeam = [noChimeAnima], EnemyTeam = [noChimeEnemy] };
+var noChimeEngine = new CombatEngine(noChimeState); // no owned Artifacts, no DelveRun
+noChimeEngine.ChoosePlayerSkill = (a, s) => null;
+noChimeEngine.StartCombat();
+noChimeEngine.RunRound();
+var noChimeBaselinePass = noChimeEnemy.IsEnraged && noChimeEnemy.EnrageTriggeredRound == 1;
+Console.WriteLine($"  [{(noChimeBaselinePass ? "PASS" : "FAIL")}] Baseline (Silent Chime not held): Enrage triggers normally on its own Round with no cancellation");
 
-Console.WriteLine($"  [{(chimeGrantedExtraPass ? "PASS" : "FAIL")}] Silent Chime grants exactly one extra action in its activated Round (actions played: {chimeActionsAfterActivatedRound})");
-Console.WriteLine($"  [{(chimeConsumedPass ? "PASS" : "FAIL")}] Silent Chime is removed from RunLedger.Artifacts immediately on activation");
-Console.WriteLine($"  [{(chimeSingleUsePass ? "PASS" : "FAIL")}] Silent Chime cannot be re-activated after being used (2nd attempt returned {chimeSecondActivationAttempt}, next Round played only {chimeActionsAfterSecondRound - chimeActionsAfterActivatedRound} action)");
+// Test C: survives across MULTIPLE combats within the same Delve -- Combat 1 has no Enrage-eligible
+// enemy at all (Silent Chime stays held, unconsumed, through a full fight), Combat 2 (fresh
+// CombatState/CombatEngine, same DelveRun) is the one that actually triggers Enrage and gets
+// cancelled. Same cross-combat persistence concern as Reforge's own DelveRun-scoped override --
+// confirms the charge isn't lost just because CombatEngine gets reconstructed between fights.
+var chimeMultiMap = MapGenerator.Generate(new Random(9002));
+var chimeMultiAnima = MakeArtifactTestAnima("SilentChimeMultiTester", MakeFocusingLensAttack(), MakeFocusingLensAttack(), MakeFocusingLensAttack());
+var chimeMultiPersistentLedger = new PersistentLedger();
+var chimeMultiRun = DelveRun.Start(chimeMultiMap, new List<AnimaUnit> { chimeMultiAnima }, chimeMultiPersistentLedger);
+chimeMultiRun.RunLedger.Artifacts.Add(SampleArtifacts.CreateSilentChime());
+
+var chimeMultiStateOne = new CombatState { PlayerTeam = [chimeMultiAnima], EnemyTeam = [MakeTankyDummy()] }; // no EnrageRound at all
+var chimeMultiEngineOne = new CombatEngine(chimeMultiStateOne, chimeMultiRun.RunLedger.Artifacts, chimeMultiRun);
+chimeMultiEngineOne.ChoosePlayerSkill = (a, s) => null;
+chimeMultiEngineOne.StartCombat();
+chimeMultiEngineOne.RunRound();
+chimeMultiEngineOne.RunRound();
+var chimeSurvivedCombatOnePass = chimeMultiRun.CurrentArtifacts.Any(a => a.Name == "Silent Chime"); // untouched -- nothing to cancel
+
+var chimeMultiEnemyTwo = MakeEnrageTestDummy(enrageRound: 1);
+var chimeMultiStateTwo = new CombatState { PlayerTeam = [chimeMultiAnima], EnemyTeam = [chimeMultiEnemyTwo] };
+var chimeMultiLogTwo = new List<string>();
+var chimeMultiEngineTwo = new CombatEngine(chimeMultiStateTwo, chimeMultiRun.RunLedger.Artifacts, chimeMultiRun);
+chimeMultiEngineTwo.ChoosePlayerSkill = (a, s) => null;
+chimeMultiEngineTwo.OnLog = line => chimeMultiLogTwo.Add(line);
+chimeMultiEngineTwo.StartCombat();
+chimeMultiEngineTwo.RunRound();
+var chimeMultiCombatTwoPass = !chimeMultiEnemyTwo.IsEnraged
+    && !chimeMultiRun.CurrentArtifacts.Any(a => a.Name == "Silent Chime")
+    && chimeMultiLogTwo.Any(l => l.Contains("Silent Chime shatters"));
+
+var chimeMultiCombatOverallPass = chimeSurvivedCombatOnePass && chimeMultiCombatTwoPass;
+Console.WriteLine($"  [{(chimeMultiCombatOverallPass ? "PASS" : "FAIL")}] Silent Chime survives a full Enrage-free Combat 1 unconsumed, then cancels Enrage in a SEPARATE Combat 2 (fresh CombatEngine, same DelveRun) -- proves the charge isn't lost to CombatEngine reconstruction between fights");
 
 // ---- Ember Core: discounts a sample Reforge cost by 20% ----
 var emberCoreRunLedger = new RunLedger();
@@ -1820,13 +1875,13 @@ var delveRewardRng = new Random(DelveSeed * 31 + 2);
 
 // This whole simulation predates the real DelveRun class and manages team/ledgers as loose
 // variables rather than through it (see delvePlayerTeam/delvePersistentLedger/delveRunLedger
-// above) -- constructed here (once, reused for every node visit) purely so the Reforge case below
-// has somewhere real to record its run-scoped override, per ReforgeService's new (DelveRun,
-// target, part, skill, ledger) signature. NOT threaded into RunDelveFight's CombatState below --
-// that's a simplification of this specific harness helper, not a product gap (the real
-// product-level integration point is CombatEngine's own optional DelveRun constructor param,
-// exercised directly in the dedicated Reforge unit tests above, not through this simulation).
-var delveRunForReforge = DelveRun.Start(delveMap, delvePlayerTeam, delvePersistentLedger, delveRunLedger);
+// above) -- constructed here (once, reused for every node visit AND threaded into every
+// RunDelveFight call below) so the Reforge case has somewhere real to record its run-scoped
+// override (ReforgeService's (DelveRun, target, part, skill, ledger) signature), and so Silent
+// Chime -- if the deterministic Artifact rotation below happens to grant it -- can actually cancel
+// a real Enrage activation instead of being an inert grant (CombatEngine's own Enrage-cancel hook
+// requires a real DelveRun, same as Reforge's override; see both of their own comments).
+var delveRunState = DelveRun.Start(delveMap, delvePlayerTeam, delvePersistentLedger, delveRunLedger);
 
 // Cycles deterministically through the full Artifact roster (SampleArtifacts.AllFactories) --
 // not a drop-rate simulation. With the 3-Artifact cap (ArtifactService.MaxArtifactsPerDelve) now
@@ -1870,7 +1925,7 @@ Skill? ChooseDelveSkill(AnimaUnit anima, CombatState state)
 
 const int DelveRoundCap = 40;
 
-(bool won, int rounds, bool stalemate) RunDelveFight(CombatState state, List<Artifact> ownedArtifacts, RunLedger runLedgerForChime, List<string> fightLog, DelveRun? delveRun = null)
+(bool won, int rounds, bool stalemate) RunDelveFight(CombatState state, List<Artifact> ownedArtifacts, List<string> fightLog, DelveRun? delveRun = null)
 {
     var engine = new CombatEngine(state, ownedArtifacts, delveRun);
     engine.ChoosePlayerSkill = ChooseDelveSkill;
@@ -1884,14 +1939,9 @@ const int DelveRoundCap = 40;
 
     engine.StartCombat();
 
-    if (runLedgerForChime.Artifacts.Any(a => a.Name == "Silent Chime"))
-    {
-        var frontline = state.PlayerTeam.FirstOrDefault(a => a.CurrentHp > 0);
-        if (frontline != null && engine.TryActivateSilentChime(frontline, runLedgerForChime))
-        {
-            fightLog.Add($"  [SIM] Silent Chime pre-activated on {frontline.Id} for this fight.");
-        }
-    }
+    // Silent Chime (REDESIGNED): fully automatic now -- CombatEngine's own Enrage-check cancels
+    // it on its own the moment it's relevant, gated on `delveRun` being supplied above. No explicit
+    // pre-activation step exists anymore, so nothing to do here.
 
     var round = 0;
     while (round < DelveRoundCap && state.PlayerTeam.Any(a => a.CurrentHp > 0) && state.EnemyTeam.Any(e => e.CurrentHp > 0))
@@ -2001,7 +2051,7 @@ foreach (var node in delvePath)
 
             Console.WriteLine($"  Fighting {fightName}...");
             var fightLog = new List<string>();
-            var (won, rounds, stalemate) = RunDelveFight(combatState, delveRunLedger.Artifacts, delveRunLedger, fightLog);
+            var (won, rounds, stalemate) = RunDelveFight(combatState, delveRunLedger.Artifacts, fightLog, delveRunState);
 
             foreach (var line in fightLog.Where(l =>
                 l.Contains("Twin Flame") || l.Contains("Silent Chime") || l.Contains("Focusing Lens")
@@ -2164,7 +2214,7 @@ foreach (var node in delvePath)
             // elsewhere in this simulation (Shop Wares, Ember pickups) -- there being no real
             // player-choice UI yet.
             var delveReforgeTarget = delvePlayerTeam.OrderBy(a => a.Position).First();
-            var delveReforgeOptions = ReforgeService.GetBrowseOptions(Part.Head, delveReforgeTarget, delveRunForReforge);
+            var delveReforgeOptions = ReforgeService.GetBrowseOptions(Part.Head, delveReforgeTarget, delveRunState);
             var delveReforgePick = delveReforgeOptions.FirstOrDefault(c => c.Skill.Color == delveReforgeTarget.Color)
                 ?? delveReforgeOptions[delveSimRng.Next(delveReforgeOptions.Count)];
             var previewCost = Anima.Core.Economy.ArtifactService.ApplyEmberCoreDiscount(
@@ -2177,7 +2227,7 @@ foreach (var node in delvePath)
                 break;
             }
 
-            var accepted = ReforgeService.Accept(delveRunForReforge, delveReforgeTarget, Part.Head, delveReforgePick.Skill, delvePersistentLedger, delveRunLedger);
+            var accepted = ReforgeService.Accept(delveRunState, delveReforgeTarget, Part.Head, delveReforgePick.Skill, delvePersistentLedger, delveRunLedger);
             Console.WriteLine(accepted
                 ? $"  Accepted -- {delveReforgeTarget.Id}'s Head is now {delveReforgePick.Skill.Name} for the rest of this Delve (real Head field untouched: {delveReforgeTarget.Head.Name})."
                 : "  Accept unexpectedly failed despite passing the affordability check.");

@@ -133,15 +133,15 @@ public static class SampleArtifacts
         };
     }
 
-    // Activated via CombatEngine.TryActivateSilentChime rather than a hook field -- it's a
-    // player-chosen, mid-Round action (which Anima, which Round) rather than a passive that fires
-    // on a fixed trigger the way every other Artifact here does.
+    // REDESIGNED (replaces the old "grants one chosen Anima an extra action" effect entirely --
+    // see CombatEngine.TryConsumeSilentChimeCancel's own comment for the mechanic and CLAUDE.md
+    // for why): fully automatic, no player action/targeting of any kind.
     public static Artifact CreateSilentChime()
     {
         return new Artifact
         {
             Name = "Silent Chime",
-            Description = "Single-use per Delve. When activated, grants one chosen Anima an immediate extra action right after their current action resolves, within the same Round.",
+            Description = "Single-use per Delve. The first time an enemy would trigger Enrage, this shatters and cancels that Enrage activation entirely instead.",
         };
     }
 

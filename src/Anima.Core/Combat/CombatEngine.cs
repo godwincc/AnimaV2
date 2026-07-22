@@ -138,24 +138,6 @@ public class CombatEngine
         RoundEndPhase();
     }
 
-    // Silent Chime: single-use per Delve, so activating it consumes the Artifact from runLedger
-    // immediately (mirrors Withering Fang's "consumed on use" pattern in ArtifactService) --
-    // returns false and does nothing if it isn't owned/already used. The extra action itself is
-    // granted later -- by ActionPhase for RunRound's synchronous path, or by ResolvePlayerAction/
-    // ResolvePlayerPass for the resumable path -- the moment `target`'s normal turn resolves in
-    // whichever Round is running when this was called. Stored on CombatState (not an engine
-    // field, see its own comment) so it survives a fresh CombatEngine reconstructed between this
-    // call and the Round it applies to.
-    public bool TryActivateSilentChime(Anima target, RunLedger runLedger)
-    {
-        var silentChime = runLedger.Artifacts.FirstOrDefault(a => a.Name == "Silent Chime");
-        if (silentChime == null) return false;
-
-        runLedger.Artifacts.Remove(silentChime);
-        _state.PendingSilentChimeTarget = target;
-        return true;
-    }
-
     private void RoundStartPhase()
     {
         // Energy refill (+3, capped)
@@ -204,11 +186,52 @@ public class CombatEngine
         {
             if (enemy.EnrageRound.HasValue && !enemy.IsEnraged && _state.RoundNumber >= enemy.EnrageRound.Value)
             {
+                // Silent Chime: the first Enrage activation in this Delve while the Artifact is
+                // held is cancelled entirely (IsEnraged never gets set for this attempt) and the
+                // charge is consumed -- see TryConsumeSilentChimeCancel's own comment. Deliberately
+                // does NOT set IsEnraged here, so this exact enemy is re-checked (and can enrage
+                // for real) on the very next RoundStartPhase call, now that the charge is spent.
+                if (TryConsumeSilentChimeCancel())
+                {
+                    Log($"  Silent Chime shatters -- {enemy.Name}'s Enrage activation is cancelled entirely!");
+                    continue;
+                }
+
                 enemy.IsEnraged = true;
                 enemy.EnrageTriggeredRound = _state.RoundNumber;
                 Log($"{enemy.Name} becomes ENRAGED! Damage output increased.");
             }
         }
+    }
+
+    // Silent Chime (REDESIGNED -- replaces the old "grants an extra action" effect entirely; see
+    // CLAUDE.md's own note on this). Single-use per Delve: the first time ANY enemy triggers
+    // Enrage activation while this is held, it cancels that activation outright and is consumed.
+    // Any Enrage activation after that -- the same enemy re-attempting next Round (IsEnraged was
+    // deliberately left false above, so its condition re-checks), or a different enemy later in
+    // the Delve -- resolves normally, since the charge is already gone by then.
+    //
+    // Requires a real DelveRun, not just this engine's own defensively-copied _ownedArtifacts
+    // snapshot (see the constructor's own comment): "consumed" must survive into whichever LATER
+    // combat in this same Delve is the one that actually triggers Enrage first -- a fresh
+    // CombatEngine gets reconstructed per combat (per hub call, in GameHub's real pattern), so
+    // anything that isn't stored on DelveRun itself would silently reset. Exactly the same
+    // cross-combat persistence problem Reforge's own DelveRun-scoped override already solves.
+    // "Held" is read via DelveRun.CurrentArtifacts; consumption removes the Artifact from the
+    // real RunLedger.Artifacts list underneath it (same list CurrentArtifacts exposes, and the
+    // same "consumed = removed" pattern Withering Fang already uses in ArtifactService.
+    // OnNodeVisited) -- not a separate flag, so "still held" and "not yet consumed" are the same
+    // check by construction. If no DelveRun was supplied (an old call site with no Reforge/
+    // cross-combat needs), this silently no-ops -- same as every other DelveRun-optional behavior.
+    private bool TryConsumeSilentChimeCancel()
+    {
+        if (_delveRun is null) return false;
+
+        var silentChime = _delveRun.CurrentArtifacts.FirstOrDefault(a => a.Name == "Silent Chime");
+        if (silentChime is null) return false;
+
+        _delveRun.RunLedger.Artifacts.Remove(silentChime);
+        return true;
     }
 
     // Enrage escalation: EnrageDamageMultiplier is the bonus at the triggering Round; every
@@ -279,16 +302,6 @@ public class CombatEngine
                 case Enemy enemy:
                     ResolveEnemyTurn(enemy);
                     break;
-            }
-
-            // Silent Chime: grants the targeted Anima one immediate extra action right after
-            // their current action resolves, within the same Round -- checked here, right after
-            // the normal turn above, rather than re-entering the initiative loop.
-            if (actor is Anima chimeTarget && ReferenceEquals(_state.PendingSilentChimeTarget, chimeTarget) && chimeTarget.CurrentHp > 0)
-            {
-                _state.PendingSilentChimeTarget = null;
-                Log($"  Silent Chime grants {chimeTarget.DisplayName} an extra action!");
-                ResolvePlayerTurn(chimeTarget);
             }
         }
     }
@@ -466,7 +479,7 @@ public class CombatEngine
             throw new InvalidOperationException("Insufficient Energy.");
 
         ExecutePlayerSkill(anima, skill, explicitTarget);
-        AdvanceTurnOrConsumeSilentChime(anima);
+        _state.TurnIndex++;
     }
 
     // The explicit "Pass" action -- distinct from ChoosePlayerSkill returning null (RunRound's
@@ -477,24 +490,6 @@ public class CombatEngine
             throw new InvalidOperationException($"It is not {anima.DisplayName}'s turn.");
 
         Log($"{anima.DisplayName} passes.");
-        AdvanceTurnOrConsumeSilentChime(anima);
-    }
-
-    // Silent Chime's resumable-path equivalent of ActionPhase's own check (RunRound's synchronous
-    // path): if anima is this Round's pending Silent Chime target, consume it and leave TurnIndex
-    // unadvanced -- CurrentActor stays anima, so the client's next ResolvePlayerAction/
-    // ResolvePlayerPass call resolves the granted extra action instead of the next actor in
-    // TurnOrder. Otherwise, advance normally. Applies after either a played skill or a Pass, same
-    // as ActionPhase (Silent Chime doesn't care which the normal turn was).
-    private void AdvanceTurnOrConsumeSilentChime(Anima anima)
-    {
-        if (ReferenceEquals(_state.PendingSilentChimeTarget, anima) && anima.CurrentHp > 0)
-        {
-            _state.PendingSilentChimeTarget = null;
-            Log($"  Silent Chime grants {anima.DisplayName} an extra action!");
-            return;
-        }
-
         _state.TurnIndex++;
     }
 
