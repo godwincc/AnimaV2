@@ -13,6 +13,7 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
     public DbSet<PendingWeaveEntity> PendingWeaves => Set<PendingWeaveEntity>();
     public DbSet<PendingPurchasedEmberEntity> PendingPurchasedEmbers => Set<PendingPurchasedEmberEntity>();
     public DbSet<PendingBossHatchEntity> PendingBossHatches => Set<PendingBossHatchEntity>();
+    public DbSet<DelveHistoryEntity> DelveHistories => Set<DelveHistoryEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -62,6 +63,14 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
         modelBuilder.Entity<PendingBossHatchEntity>(e =>
         {
             e.HasIndex(h => h.AccountId).IsUnique();
+            e.Property(h => h.Version).IsConcurrencyToken();
+        });
+
+        // NOT unique -- up to 5 rows per (AccountId, AnimaId) by design (the capped last-5 log).
+        // Indexed on the (AccountId, AnimaId) pair since every real read/trim filters on both.
+        modelBuilder.Entity<DelveHistoryEntity>(e =>
+        {
+            e.HasIndex(h => new { h.AccountId, h.AnimaId });
             e.Property(h => h.Version).IsConcurrencyToken();
         });
     }

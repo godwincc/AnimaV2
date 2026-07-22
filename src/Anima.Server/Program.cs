@@ -33,6 +33,7 @@ builder.Services.AddScoped<AccountArtifactStatRepository>();
 builder.Services.AddScoped<PendingWeaveRepository>();
 builder.Services.AddScoped<PendingPurchasedEmberRepository>();
 builder.Services.AddScoped<PendingBossHatchRepository>();
+builder.Services.AddScoped<DelveHistoryRepository>();
 builder.Services.AddSingleton<PlayerSessionRegistry>();
 
 builder.Services.AddSignalR();

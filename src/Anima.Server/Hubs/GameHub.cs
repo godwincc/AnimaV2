@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Anima.Core.Combat;
 using Anima.Core.Data;
 using Anima.Core.Economy;
@@ -7,6 +8,7 @@ using Anima.Core.Models;
 using Anima.Core.Run;
 using Anima.Core.Weaving;
 using Anima.Server.Auth;
+using Anima.Server.Data.Entities;
 using Anima.Server.Persistence;
 using Anima.Server.Sessions;
 using Microsoft.AspNetCore.Authorization;
@@ -19,8 +21,10 @@ namespace Anima.Server.Hubs;
 // core Combat loop (Phase 5a) are ported, and Phase 5b (this session) closes out Victory/Defeat/
 // Retreat rewards, DelveEndService, Boss-hatch + Anima Reveal, and the Artifact win-count stat --
 // all directly inside SubmitAction's terminal-outcome handling, plus ConfirmBossHatch/
-// RetreatFromDelve. Reforge stays deliberately deferred (0% map odds, unresolved open items) -- see
-// CLAUDE.md's Server / Accounts / Auth section for the current real method-surface breakdown.
+// RetreatFromDelve. Reforge's own mechanic was redesigned and re-implemented in Anima.Core this
+// session (browse-and-pick, no more random roll -- see Anima.Core.Reforge.ReforgeService), but it
+// still stays deliberately deferred at the hub layer (0% map odds, unreachable in real play) --
+// see CLAUDE.md's Server / Accounts / Auth section for the current real method-surface breakdown.
 [Authorize]
 public class GameHub(
     PlayerSessionRegistry sessions,
@@ -30,7 +34,8 @@ public class GameHub(
     AccountArtifactStatRepository artifactStatsRepo,
     PendingWeaveRepository pendingWeaveRepo,
     PendingPurchasedEmberRepository purchasedEmberRepo,
-    PendingBossHatchRepository pendingBossHatchRepo) : Hub
+    PendingBossHatchRepository pendingBossHatchRepo,
+    DelveHistoryRepository delveHistoryRepo) : Hub
 {
     private Guid AccountId =>
         Guid.Parse(Context.User!.FindFirst(JwtTokenService.AccountIdClaimType)!.Value);
@@ -124,7 +129,7 @@ public class GameHub(
     // client issue a second lookup per link. GenomeFactory.CreateGenome is the single "genome for
     // any roster Anima" entry point (real stored R1/R2 for Weave/Boss-hatch, the synthesized
     // placeholder for the starter trio) -- see its own comment.
-    public Task<AnimaDetail> GetAnimaDetail(string animaId)
+    public async Task<AnimaDetail> GetAnimaDetail(string animaId)
     {
         var anima = Session.Roster.FindById(animaId) ?? throw new HubException($"Anima {animaId} not found in this account's roster.");
         var genome = GenomeFactory.CreateGenome(anima);
@@ -139,12 +144,21 @@ public class GameHub(
             ToPartGenomeSummary(nameof(Part.Crest), genome.Crest),
         ];
 
-        return Task.FromResult(new AnimaDetail(
+        var historyRows = await delveHistoryRepo.LoadRecentAsync(AccountId, anima.Id);
+        var history = historyRows
+            .Select(r => new DelveHistoryEntry(
+                r.Outcome, r.FloorIndexReached, r.CombatsWon, r.ElitesDefeated, r.BossDefeated,
+                JsonSerializer.Deserialize<List<string>>(r.TeammateNamesJson) ?? [],
+                r.WispEarnedThisRun, r.Timestamp))
+            .ToList();
+
+        return new AnimaDetail(
             anima.Id, anima.Name, anima.Color.ToString(), anima.Gen, anima.WeaveCount, anima.CurrentHp, anima.MaxHp,
             Session.TeamAnimaIds.Contains(anima.Id), parts,
             anima.ParentAId, ResolveName(anima.ParentAId),
             anima.ParentBId, ResolveName(anima.ParentBId),
-            anima.EchoTwinId, ResolveName(anima.EchoTwinId)));
+            anima.EchoTwinId, ResolveName(anima.EchoTwinId),
+            anima.CompletedDelveCount, anima.FailedDelveCount, history);
     }
 
     private static SkillSummary ToSkillSummary(Skill s) => new(s.Name, s.Category.ToString(), s.Color?.ToString() ?? "");
@@ -775,13 +789,19 @@ public class GameHub(
             {
                 // Captured BEFORE MarkCurrentNodeCleared below, so the summary reports nodes
                 // actually cleared before the fatal fight, not counting the one that ended the run.
+                // Same snapshot backs Delve History's CombatsWon/ElitesDefeated counts -- the fatal
+                // fight was a loss, not a clear, so it must NOT be counted either.
                 var nodesClearedBeforeThis = run.ClearedNodes.Count;
                 var floorIndexReached = run.CurrentNode?.FloorIndex ?? 0;
+                var combatsWonBeforeThis = run.ClearedNodes.Count(n => n.Type == MapNodeType.Combat);
+                var elitesDefeatedBeforeThis = run.ClearedNodes.Count(n => n.Type == MapNodeType.Elite);
 
                 var result = DelveEndService.ResolveDefeat(Session.Ledger, run.RunLedger);
                 await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
 
                 defeatSummary = new DelveEndSummary(result.WispEarnedThisRun, result.WispKept, result.WispForfeited, floorIndexReached, nodesClearedBeforeThis);
+
+                await RecordDelveOutcomeAsync(run, DelveOutcome.Defeat, floorIndexReached, combatsWonBeforeThis, elitesDefeatedBeforeThis, false, result.WispEarnedThisRun);
 
                 run.MarkCurrentNodeCleared();
                 Session.ActiveCombat = null;
@@ -861,6 +881,13 @@ public class GameHub(
             await artifactStatsRepo.RecordWinAsync(AccountId, artifact.Name);
         }
 
+        // Delve History (per-Anima lifetime counters + capped last-5 log) -- same reachability
+        // window as completeSummary above (run.ClearedNodes already includes the Boss node itself,
+        // since the caller's MarkCurrentNodeCleared() already ran).
+        var combatsWon = run.ClearedNodes.Count(n => n.Type == MapNodeType.Combat);
+        var elitesDefeated = run.ClearedNodes.Count(n => n.Type == MapNodeType.Elite);
+        await RecordDelveOutcomeAsync(run, DelveOutcome.Victory, run.CurrentNode!.FloorIndex, combatsWon, elitesDefeated, true, run.WispEarnedSoFar);
+
         var reward = new CombatVictoryReward(wispGranted, false, echoShardGranted, await GetPendingEmberColorsAsync());
         return (reward, ToPreview(genome));
     }
@@ -910,7 +937,7 @@ public class GameHub(
     // mid-combat (Session.ActiveCombat set) -- there's deliberately no other "mid-node" state to
     // guard against today, since every other node type (Resource/Treasure/Shop) resolves atomically
     // in one call and leaves nothing lingering to be "inside" of.
-    public Task<DelveEndSummary> RetreatFromDelve()
+    public async Task<DelveEndSummary> RetreatFromDelve()
     {
         var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
         if (Session.ActiveCombat is not null)
@@ -918,11 +945,49 @@ public class GameHub(
 
         var nodesCleared = run.ClearedNodes.Count;
         var floorIndexReached = run.CurrentNode?.FloorIndex ?? 0;
+        var combatsWon = run.ClearedNodes.Count(n => n.Type == MapNodeType.Combat);
+        var elitesDefeated = run.ClearedNodes.Count(n => n.Type == MapNodeType.Elite);
         var result = DelveEndService.ResolveRetreat(Session.Ledger, run.RunLedger);
+
+        // BossDefeated is always false here -- Boss is the map's terminal node and clearing it ends
+        // the Delve immediately (see the Boss-Victory branch above), so a Retreat can never happen
+        // after it.
+        await RecordDelveOutcomeAsync(run, DelveOutcome.Retreat, floorIndexReached, combatsWon, elitesDefeated, false, result.WispEarnedThisRun);
 
         Session.ActiveDelveRun = null;
 
-        return Task.FromResult(new DelveEndSummary(result.WispEarnedThisRun, result.WispKept, result.WispForfeited, floorIndexReached, nodesCleared));
+        return new DelveEndSummary(result.WispEarnedThisRun, result.WispKept, result.WispForfeited, floorIndexReached, nodesCleared);
+    }
+
+    // Shared by all three Delve-end resolution points (Boss Victory/Defeat/Retreat): bumps each
+    // team member's lifetime CompletedDelveCount/FailedDelveCount (rides the same per-Anima save
+    // every other mutation already goes through -- no migration needed, see Models.Anima's own
+    // comment) and appends one capped-last-5 DelveHistoryEntity row per member. Callers are
+    // responsible for computing floorIndexReached/combatsWon/elitesDefeated/bossDefeated at the
+    // RIGHT snapshot point for their own outcome (e.g. Defeat's fatal fight must NOT count as a won
+    // Combat) -- this helper just records whatever it's given, it doesn't re-derive anything from
+    // run itself beyond Team/Name.
+    private async Task RecordDelveOutcomeAsync(
+        DelveRun run,
+        DelveOutcome outcome,
+        int floorIndexReached,
+        int combatsWon,
+        int elitesDefeated,
+        bool bossDefeated,
+        int wispEarnedThisRun)
+    {
+        var teammateNames = run.Team.Select(a => a.Name).ToList();
+
+        foreach (var member in run.Team)
+        {
+            if (outcome == DelveOutcome.Victory) member.CompletedDelveCount++;
+            else member.FailedDelveCount++;
+            await rosterRepo.SaveAnimaAsync(AccountId, member);
+
+            await delveHistoryRepo.AppendAsync(
+                AccountId, member.Id, outcome, floorIndexReached,
+                combatsWon, elitesDefeated, bossDefeated, teammateNames, wispEarnedThisRun);
+        }
     }
 
     private static ICombatant ResolveCombatantRef(CombatState state, CombatantRef reference)

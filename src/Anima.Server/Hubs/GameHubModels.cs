@@ -195,6 +195,19 @@ public record DelveCompleteSummary(int FloorIndexReached, int NodesCleared, IRea
 // it.
 public record BossHatchConfirmResult(AnimaSummary Anima, DelveCompleteSummary? DelveComplete);
 
+// One row from DelveHistoryEntity -- the capped last-5 (newest first) per-Anima log backing Anima
+// Profile's "Delve History" section. Outcome is the DelveOutcome enum's ToString() (Victory/
+// Defeat/Retreat), same string-DTO convention every other wire enum in this file already uses.
+public record DelveHistoryEntry(
+    string Outcome,
+    int FloorIndexReached,
+    int CombatsWon,
+    int ElitesDefeated,
+    bool BossDefeated,
+    IReadOnlyList<string> TeammateNames,
+    int WispEarnedThisRun,
+    DateTime Timestamp);
+
 public record AnimaDetail(
     string Id,
     string Name,
@@ -210,4 +223,7 @@ public record AnimaDetail(
     string? ParentBId,
     string? ParentBName,
     string? EchoTwinId,
-    string? EchoTwinName);
+    string? EchoTwinName,
+    int CompletedDelveCount,
+    int FailedDelveCount,
+    IReadOnlyList<DelveHistoryEntry> RecentDelveHistory);

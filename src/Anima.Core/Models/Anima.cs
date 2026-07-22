@@ -58,6 +58,14 @@ public class Anima : ICombatant
     public int Position { get; set; } // 1, 2, or 3
     public List<StatusEffectInstance> ActiveStatuses { get; set; } = new();
 
+    // Lifetime Delve History counters (per Anima Profile's own section) -- incremented for every
+    // team member at Delve-end: Completed on Boss Victory, Failed on Defeat OR Retreat. Plain ints
+    // default to 0, same nullable-free treatment WeaveCount already gets (unlike HeadR1 etc., there's
+    // no "founder never had this" ambiguity to encode -- a starter-trio Anima that's never been on a
+    // Delve genuinely has 0 of both, same as a freshly materialized Weave/Boss-hatch Anima).
+    public int CompletedDelveCount { get; set; } = 0;
+    public int FailedDelveCount { get; set; } = 0;
+
     public Skill[] DeckSkills => new[] { Head, Frame, Tail }; // Crest excluded from deck
 
     public string DisplayName => Name;
