@@ -1,4 +1,5 @@
 using Anima.Core.Economy;
+using Anima.Core.Enums;
 using Anima.Core.Map;
 using Anima.Core.Models;
 using AnimaUnit = Anima.Core.Models.Anima;
@@ -79,6 +80,50 @@ public sealed class DelveRun
     public IReadOnlyList<Artifact> CurrentArtifacts => RunLedger.Artifacts;
 
     public int WispEarnedSoFar => Math.Max(0, PersistentLedger.GetBalance(ResourceType.Wisp) - RunLedger.WispAtDelveStart);
+
+    // Reforge run-scoped overrides (NEW, replaces the old "mutate the Anima directly" design) --
+    // keyed by (target Anima's Id, Part), consulted only at deck-build time (see
+    // CombatEngine's optional DelveRun constructor param / GetDeckSkills). Deliberately never
+    // touches the underlying Anima.Head/Frame/Tail fields, so a Delve-only swap can never leak
+    // into the permanent, persisted genome -- and deliberately never touches HeadR1/HeadR2 etc.
+    // either, since those are Weaving/lineage-only hidden-gene data Reforge has no business
+    // reading or writing. Discarded for free when this DelveRun itself is discarded (Boss
+    // Victory/Delve Complete, Defeat, Retreat) -- no explicit clear needed, since a fresh
+    // DelveRun.Start() always begins with an empty dictionary.
+    private readonly Dictionary<(string AnimaId, Part Part), Skill> _reforgeOverrides = new();
+
+    // Crest is deliberately never a valid key here -- it contributes no deck cards (see
+    // Models.Anima.DeckSkills), so ReforgeService never offers it and this guards the same
+    // invariant defensively at the one other place an override could be written.
+    public void SetReforgeOverride(AnimaUnit target, Part part, Skill skill)
+    {
+        if (part == Part.Crest)
+        {
+            throw new InvalidOperationException("Reforge does not support Crest -- it contributes no deck cards.");
+        }
+        _reforgeOverrides[(target.Id, part)] = skill;
+    }
+
+    // The skill deck-build should actually use for (anima, part) this Delve -- the Reforge
+    // override if one was Accepted this Delve, otherwise the Anima's own real Head/Frame/Tail.
+    public Skill GetEffectiveSkill(AnimaUnit anima, Part part)
+    {
+        if (_reforgeOverrides.TryGetValue((anima.Id, part), out var overrideSkill)) return overrideSkill;
+
+        return part switch
+        {
+            Part.Head => anima.Head,
+            Part.Frame => anima.Frame,
+            Part.Tail => anima.Tail,
+            _ => throw new ArgumentOutOfRangeException(nameof(part), part, "Reforge/deck-build only cover Head/Frame/Tail."),
+        };
+    }
+
+    // Mirrors Models.Anima.DeckSkills' own Head/Frame/Tail order, but resolved through any active
+    // Reforge overrides first -- this is what CombatEngine's deck-build should iterate instead of
+    // anima.DeckSkills directly whenever a DelveRun is in play.
+    public Skill[] GetEffectiveDeckSkills(AnimaUnit anima) =>
+        new[] { GetEffectiveSkill(anima, Part.Head), GetEffectiveSkill(anima, Part.Frame), GetEffectiveSkill(anima, Part.Tail) };
 
     // The one real wiring gap this surfaced: RunLedger.WispAtDelveStart existed since the Match
     // Result & Retreat System session, but nothing outside tests ever actually SET it -- every real

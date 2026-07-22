@@ -3,11 +3,13 @@ namespace Anima.Core.Combat;
 using Anima.Core.Economy;
 using Anima.Core.Enums;
 using Anima.Core.Models;
+using Anima.Core.Run;
 
 public class CombatEngine
 {
     private readonly CombatState _state;
     private readonly List<Artifact> _ownedArtifacts;
+    private readonly DelveRun? _delveRun;
     private readonly Random _random = new();
 
     // A hard backstop inside DrawCards itself, distinct from HandMax (the 5/6 target size
@@ -43,13 +45,27 @@ public class CombatEngine
 
     // ownedArtifacts: the Artifacts currently owned for this Delve (typically RunLedger.Artifacts)
     // -- optional so every existing call site with no Artifacts in play still compiles unchanged.
-    public CombatEngine(CombatState state, IReadOnlyList<Artifact>? ownedArtifacts = null)
+    // delveRun: optional (NEW, Reforge redesign) -- when supplied, deck-build consults its Reforge
+    // overrides (see GetDeckSkills) instead of each Anima's raw DeckSkills. Every existing call
+    // site passes neither/null here, so this is purely additive: behavior is byte-for-byte
+    // unchanged unless a caller actually has a DelveRun with an active Reforge override to apply.
+    public CombatEngine(CombatState state, IReadOnlyList<Artifact>? ownedArtifacts = null, DelveRun? delveRun = null)
     {
         _state = state;
         _ownedArtifacts = ownedArtifacts?.ToList() ?? [];
+        _delveRun = delveRun;
     }
 
     private bool HasArtifact(string name) => _ownedArtifacts.Any(a => a.Name == name);
+
+    // The skills (anima) actually contributes to the deck this Delve -- anima.DeckSkills (its real
+    // Head/Frame/Tail), unless a Reforge override is active for one of those parts, in which case
+    // the override's Skill instance is used instead. Every combat-loop usage of "this Anima's deck
+    // skills" (deck build, ownership validation, dead-Anima card purge) MUST go through this, not
+    // anima.DeckSkills directly, or a Reforge-overridden card would be drawn into the deck by
+    // BuildDeck but then rejected as "not owned" by ResolvePlayerAction, and never cleaned up by
+    // PurgeDeadAnimaCards.
+    private Skill[] GetDeckSkills(Anima anima) => _delveRun?.GetEffectiveDeckSkills(anima) ?? anima.DeckSkills;
 
     // The hand's target size -- persistent hand, top-up draw model (replaces an earlier flat
     // "draw N/Round" design): the opening hand at combat start and every Round Start's top-up
@@ -90,7 +106,7 @@ public class CombatEngine
     {
         foreach (var anima in _state.PlayerTeam)
         {
-            foreach (var skill in anima.DeckSkills)
+            foreach (var skill in GetDeckSkills(anima))
             {
                 for (var i = 0; i < CopiesPerSkill; i++)
                 {
@@ -442,7 +458,7 @@ public class CombatEngine
     {
         if (!ReferenceEquals(_state.CurrentActor, anima))
             throw new InvalidOperationException($"It is not {anima.DisplayName}'s turn.");
-        if (!anima.DeckSkills.Contains(skill))
+        if (!GetDeckSkills(anima).Contains(skill))
             throw new InvalidOperationException($"{skill.Name} does not belong to {anima.DisplayName}.");
         if (!IsSkillUsableFrom(skill, anima.Position))
             throw new InvalidOperationException($"{skill.Name} cannot be used from position {anima.Position}.");
@@ -1022,7 +1038,7 @@ public class CombatEngine
         // time after. That conservation invariant makes this an exact "has this Anima's death
         // already been processed?" check -- the gate both PurgeDeadAnimaCards' own log message
         // and TriggerLastLaugh below need to fire exactly once per death.
-        var deckSkills = anima.DeckSkills;
+        var deckSkills = GetDeckSkills(anima);
         var stillInDeck = _state.Hand.Any(s => deckSkills.Contains(s))
             || _state.DrawPile.Any(s => deckSkills.Contains(s))
             || _state.DiscardPile.Any(s => deckSkills.Contains(s));
