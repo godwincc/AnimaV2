@@ -152,16 +152,43 @@ public class GameHub(
                 r.WispEarnedThisRun, r.Timestamp))
             .ToList();
 
+        // Siblings: every OTHER roster Anima that's a full sibling of this one (excludes self --
+        // AreFullSiblings(a, a) is trivially true whenever a has both parents, since a.ParentAId ==
+        // a.ParentAId etc., so self has to be filtered out explicitly).
+        var siblings = Session.Roster.Animas
+            .Where(other => other.Id != anima.Id && WeavingService.AreFullSiblings(anima, other))
+            .Select(other => new SiblingRef(other.Id, other.Name))
+            .ToList();
+
         return new AnimaDetail(
             anima.Id, anima.Name, anima.Color.ToString(), anima.Gen, anima.WeaveCount, anima.CurrentHp, anima.MaxHp,
             Session.TeamAnimaIds.Contains(anima.Id), parts,
             anima.ParentAId, ResolveName(anima.ParentAId),
             anima.ParentBId, ResolveName(anima.ParentBId),
             anima.EchoTwinId, ResolveName(anima.EchoTwinId),
+            siblings,
             anima.CompletedDelveCount, anima.FailedDelveCount, history);
     }
 
-    private static SkillSummary ToSkillSummary(Skill s) => new(s.Name, s.Category.ToString(), s.Color?.ToString() ?? "");
+    // Anima Profile's only mutation -- renames one roster Anima in place. No uniqueness/length
+    // constraint, matching every other naming flow's own bar (ConfirmWeave/ConfirmStarterAnima only
+    // ever check IsNullOrWhiteSpace too). Persisted immediately via the same SaveAnimaAsync every
+    // other roster mutation (HP attrition, Reforge, etc.) already uses -- no separate "unsaved
+    // rename" pending state, unlike a Weave/Boss-hatch reveal, since there's no cost/roll to protect
+    // against a dropped connection here.
+    public async Task<AnimaSummary> RenameAnima(string animaId, string newName)
+    {
+        if (string.IsNullOrWhiteSpace(newName))
+            throw new HubException("A name is required.");
+
+        var anima = Session.Roster.FindById(animaId) ?? throw new HubException($"Anima {animaId} not found in this account's roster.");
+        anima.Name = newName.Trim();
+        await rosterRepo.SaveAnimaAsync(AccountId, anima);
+
+        return ToSummary(anima);
+    }
+
+    private static SkillSummary ToSkillSummary(Skill s) => new(s.Name, s.Category.ToString(), s.Color?.ToString() ?? "", s.BaseShield > 0);
 
     private static PartGenomeSummary ToPartGenomeSummary(string part, PartGenome genome) =>
         new(part, ToSkillSummary(genome.Dominant), ToSkillSummary(genome.R1), ToSkillSummary(genome.R2));

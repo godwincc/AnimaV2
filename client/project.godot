@@ -1,14 +1,23 @@
 ; Engine configuration file.
-; It's best edited using the editor UI and not directly, since the parameters
-; that go here are meant to be set in the Project Settings dialog.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
 config_version=5
 
 [application]
 
 config/name="AnimaClient"
-run/main_scene="res://scenes/connectivity_test.tscn"
-config/features=PackedStringArray("4.3", "GDScript")
+run/main_scene="res://scenes/login.tscn"
+config/features=PackedStringArray("4.7")
+
+[autoload]
+
+AuthState="*res://scripts/auth_state.gd"
+NavState="*res://scripts/nav_state.gd"
 
 [editor_plugins]
 

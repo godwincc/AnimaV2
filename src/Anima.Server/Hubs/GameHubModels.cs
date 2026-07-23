@@ -76,7 +76,11 @@ public record BuyWaresArtifactResult(string ArtifactName, string ArtifactDescrip
 
 public record AttemptWeaveRequest(string ParentAId, string ParentBId, bool SpendEchoShards);
 
-public record SkillSummary(string Name, string Category, string Color);
+// GrantsShield (NEW, Anima Profile session) -- same signal AnimaPartSummary already carries for
+// Sanctum/Hub's icon coloring (Category alone can't distinguish a shield-granting Buff from any
+// other Buff); added here too since the Threads section's dot-accent coloring needs the identical
+// sword/heart/shield/bolt/diamond rule and Dominant/R1/R2 are all SkillSummary, not AnimaPartSummary.
+public record SkillSummary(string Name, string Category, string Color, bool GrantsShield);
 
 public record PartGenomeSummary(string Part, SkillSummary Dominant, SkillSummary R1, SkillSummary R2);
 
@@ -208,6 +212,13 @@ public record DelveHistoryEntry(
     int WispEarnedThisRun,
     DateTime Timestamp);
 
+// A full-sibling link for Anima Profile's Lineage section -- resolved the same "this account's
+// roster is already fully loaded in-memory" way Parent/Echo-Twin names already are (see
+// GetAnimaDetail's own comment), via WeavingService.AreFullSiblings against every other roster
+// Anima. Unlike Parent/Echo-Twin (each at most one), a Weave pair can produce siblings across
+// multiple separate Weaves, so this is a list, not a nullable single Id/Name pair.
+public record SiblingRef(string Id, string Name);
+
 public record AnimaDetail(
     string Id,
     string Name,
@@ -224,6 +235,7 @@ public record AnimaDetail(
     string? ParentBName,
     string? EchoTwinId,
     string? EchoTwinName,
+    IReadOnlyList<SiblingRef> Siblings,
     int CompletedDelveCount,
     int FailedDelveCount,
     IReadOnlyList<DelveHistoryEntry> RecentDelveHistory);
