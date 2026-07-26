@@ -4,8 +4,19 @@ namespace Anima.Server.Hubs;
 // wire DTOs -- consumers (client, tests) shouldn't need a reference to Anima.Core just to read a
 // hub response. Category is likewise Skill.Category.ToString(); the client maps it (plus the
 // Part name, for the Crest-is-always-diamond rule) to the sword/heart/shield/bolt/diamond icon
-// set per CLAUDE.md's Skill-type icon set.
-public record AnimaPartSummary(string Part, string SkillName, string Category);
+// set per CLAUDE.md's Skill-type icon set. GrantsShield (NEW, Hub screen session) is what actually
+// separates shield-granting Buffs (shield icon) from every other Buff (bolt icon) -- Category
+// alone can't (both are "Buff"), so this rides along as its own field rather than making the
+// client guess from the skill name.
+// Description (NEW, Delve map screen session) is synthesized server-side from the skill's own
+// mechanical fields (Category/BaseDamage/BaseHeal/BaseShield/EnergyCost) -- confirmed by reading
+// Models.Skill that NO skill anywhere in this codebase carries actual flavor/effect text (Combat's
+// own HandCardSummary doesn't either), so this is plain mechanically-accurate text built from real
+// data, not invented copy, same "synthesize from real stored fields" precedent GetLastDelveSummary
+// already set. AppliedAugments (NEW, same session) mirrors Skill.AppliedAugments (List<AugmentType>)
+// as ToString() names -- Count > 0 is the Delve map Team panel's "has augments" badge signal, the
+// full list is what the docked message area shows on hover/tap.
+public record AnimaPartSummary(string Part, string SkillName, string Category, bool GrantsShield, string Description, IReadOnlyList<string> AppliedAugments);
 
 public record AnimaSummary(
     string Id,
@@ -27,7 +38,28 @@ public record ArtifactSummary(string Name, string Description, bool Discovered, 
 
 public record NodeRef(int FloorIndex, int Column, string? Type);
 
-public record DelveStatus(NodeRef? CurrentNode, IReadOnlyList<NodeRef> AvailableNodes, int WispEarnedSoFar);
+// DelveMapNode/AllNodes (NEW, Delve map screen session) -- a real, confirmed gap: DelveStatus used
+// to expose only CurrentNode/AvailableNodes, enough for the OLD "what can I do right now" callers
+// (Resource/Treasure/Shop/Reforge node resolution) but not enough to render CLAUDE.md's own "map is
+// LARGE/primary focus" Delve screen design, which needs the WHOLE graph (cleared-behind nodes and
+// not-yet-reachable-ahead nodes, both shown dimmed, plus the connector lines between them). Cleared
+// mirrors DelveRun.ClearedNodes (reference-equality set) at this node; NextRefs is the adjacency
+// list connector lines are drawn from -- both real signals that already existed on MapNode/DelveRun,
+// just never carried across the wire before this.
+public record DelveMapNode(int FloorIndex, int Column, string? Type, bool Cleared, IReadOnlyList<NodeRef> NextRefs);
+
+// Name/Description straight off Anima.Core.Models.Artifact -- another real gap found the same audit
+// pass: nothing exposed DelveRun.CurrentArtifacts (a live passthrough to RunLedger.Artifacts) over
+// GameHub at all before this, despite the Delve screen's locked design needing to show currently-held
+// Artifacts inline (icon+name+full description), not just a bare count.
+public record HeldArtifactSummary(string Name, string Description);
+
+public record DelveStatus(
+    NodeRef? CurrentNode,
+    IReadOnlyList<NodeRef> AvailableNodes,
+    int WispEarnedSoFar,
+    IReadOnlyList<DelveMapNode> AllNodes,
+    IReadOnlyList<HeldArtifactSummary> Artifacts);
 
 public record StartDelveRequest(string[] TeamAnimaIds);
 
@@ -72,6 +104,49 @@ public record BuyWaresEmberRequest(int SlotIndex);
 
 public record BuyWaresArtifactResult(string ArtifactName, string ArtifactDescription, IReadOnlyList<string> PendingEmberColors);
 
+// ---- Reforge ----
+//
+// Color-first flow (REORDERED this session, was Part-first): pick a color -> browse skills for
+// that color across all 3 Parts -> pick a target Anima -> confirm (Accept/Decline). "Color" here is
+// the wire/code term throughout this file (matching ShopEmberSlot.Color, SkillSummary.Color, etc.)
+// -- the in-game UI's own label for this step is "Aspect", but that's a display-layer choice, not a
+// wire-contract rename; see Anima.Core.Reforge.ReforgeService's own terminology note for why
+// "Aspect" used to mean Head/Frame/Tail and no longer does anywhere in this codebase.
+
+public record GetReforgeBrowseOptionsRequest(string Color);
+
+// SkillName is globally unique across all 48 real skills (confirmed by reading PrimitiveRoster/
+// SkillPool, not assumed), so it alone is enough to identify a pick again in
+// GetReforgeValidTargets/AcceptReforge -- no synthetic id needed. Part is Skill.Part.ToString() --
+// which slot this pick would occupy is now fully determined by the skill itself, since there's no
+// separate "pick a slot" step anymore in the reordered flow.
+public record ReforgeSkillOption(string ArchetypeName, string SkillName, string Part, string Color);
+
+public record ReforgeValidTargetsRequest(string SkillName);
+
+// Cost is per-target (same-color-body-match vs. cross-color, hybrids always cross-color -- see
+// ReforgeService.GetAcceptCost) and already has Ember Core's discount applied, same convention
+// ShopStockSnapshot's prices already use -- the client's confirm screen needs the real charge for
+// THIS target, not a value it has to re-derive.
+public record ReforgeTargetOption(string AnimaId, int Cost);
+
+// InvalidTargetAnimaIds is everyone else on the team -- everyone for whom this specific skill would
+// be a no-op (already equipped in that Part, whether from the Anima's own real genome or an
+// already-Accepted override earlier this Delve). The client renders all (up to) 3 team cards and
+// skips/disables the invalid ones, per the task's own instruction, rather than silently omitting
+// them.
+public record ReforgeValidTargetsResult(IReadOnlyList<ReforgeTargetOption> ValidTargets, IReadOnlyList<string> InvalidTargetAnimaIds);
+
+public record AcceptReforgeRequest(string SkillName, string AnimaId);
+
+// Outcome is "Success" | "InsufficientWisp" -- a DISTINCT rejection shape (not a generic
+// HubException, unlike RestAtShop/BuyWaresEmber/BuyWaresArtifact's existing "Insufficient Wisp"
+// throw) specifically so the client can show "not enough Wisp -- needed X, have Y" and route back
+// to the Reforge/Leave landing screen. Cost/WispBalance are populated either way (the quoted price
+// and the player's actual current balance); on InsufficientWisp nothing was spent and no override
+// was recorded -- see ReforgeService.Accept's own comment for why nothing partially commits here.
+public record AcceptReforgeResult(string Outcome, int Cost, int WispBalance);
+
 // ---- Weaving ----
 
 public record AttemptWeaveRequest(string ParentAId, string ParentBId, bool SpendEchoShards);
@@ -96,6 +171,21 @@ public record WeaveRevealSnapshot(int WispCost, bool EchoTriggered, WeaveGenomeP
 public record ConfirmWeaveRequest(string PrimaryName, string? TwinName);
 
 public record WeaveConfirmResult(AnimaSummary Primary, AnimaSummary? Twin);
+
+// ---- Starter Anima Reveal (NEW) ----
+//
+// One trio slot's rolled-but-not-yet-named genome. SlotNumber/TotalCount are the ORIGINAL 1-based
+// position ("2 of 3") and the fixed total (always 3) -- SlotNumber stays fixed across a reconnect,
+// so resuming after naming slot 1 still reads "2 of 3", not "1 of 2" (GetPendingStarterReveal only
+// ever returns the REMAINING unnamed entries, never the already-confirmed ones). ArchetypeName is
+// the naming textbox's pre-filled default (e.g. "Lotus"), editable -- NOT the color name.
+public record StarterRevealEntry(int SlotNumber, int TotalCount, string ArchetypeName, WeaveGenomePreview Genome);
+
+public record ConfirmStarterAnimaRequest(string Name);
+
+// Remaining is empty once all 3 slots are named -- the client's signal to navigate to hub.tscn
+// instead of showing another reveal.
+public record StarterAnimaConfirmResult(AnimaSummary Anima, IReadOnlyList<StarterRevealEntry> Remaining);
 
 // Anima Profile's own dedicated read: R1/R2 per part (the "Show hidden" toggle) plus resolved
 // Parent/Echo-Twin names, closing both Profile-facing gaps flagged in the Phase 1 report. Not

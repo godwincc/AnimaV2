@@ -5,6 +5,7 @@ using Anima.Core.Economy;
 using Anima.Core.Enums;
 using Anima.Core.Map;
 using Anima.Core.Models;
+using Anima.Core.Reforge;
 using Anima.Core.Run;
 using Anima.Core.Weaving;
 using Anima.Server.Auth;
@@ -18,13 +19,14 @@ using AnimaUnit = Anima.Core.Models.Anima;
 namespace Anima.Server.Hubs;
 
 // Authenticated SignalR entry point. Sanctum/Collection, Weaving, Resource/Treasure/Shop, and the
-// core Combat loop (Phase 5a) are ported, and Phase 5b (this session) closes out Victory/Defeat/
-// Retreat rewards, DelveEndService, Boss-hatch + Anima Reveal, and the Artifact win-count stat --
-// all directly inside SubmitAction's terminal-outcome handling, plus ConfirmBossHatch/
-// RetreatFromDelve. Reforge's own mechanic was redesigned and re-implemented in Anima.Core this
-// session (browse-and-pick, no more random roll -- see Anima.Core.Reforge.ReforgeService), but it
-// still stays deliberately deferred at the hub layer (0% map odds, unreachable in real play) --
-// see CLAUDE.md's Server / Accounts / Auth section for the current real method-surface breakdown.
+// core Combat loop (Phase 5a) are ported, and Phase 5b closed out Victory/Defeat/Retreat rewards,
+// DelveEndService, Boss-hatch + Anima Reveal, and the Artifact win-count stat -- all directly
+// inside SubmitAction's terminal-outcome handling, plus ConfirmBossHatch/RetreatFromDelve. Reforge
+// is NOW ported too (this session, alongside its map odds going from 0% back to 5% -- see
+// GetReforgeBrowseOptions/GetReforgeValidTargets/AcceptReforge/DeclineReforge below): the
+// color-first browse flow (Anima.Core.Reforge.ReforgeService) is real and reachable in play for
+// the first time, no longer deferred. See CLAUDE.md's Server / Accounts / Auth section for the
+// current real method-surface breakdown.
 [Authorize]
 public class GameHub(
     PlayerSessionRegistry sessions,
@@ -35,7 +37,8 @@ public class GameHub(
     PendingWeaveRepository pendingWeaveRepo,
     PendingPurchasedEmberRepository purchasedEmberRepo,
     PendingBossHatchRepository pendingBossHatchRepo,
-    DelveHistoryRepository delveHistoryRepo) : Hub
+    DelveHistoryRepository delveHistoryRepo,
+    PendingStarterRevealRepository pendingStarterRevealRepo) : Hub
 {
     private Guid AccountId =>
         Guid.Parse(Context.User!.FindFirst(JwtTokenService.AccountIdClaimType)!.Value);
@@ -47,7 +50,7 @@ public class GameHub(
 
     public override async Task OnConnectedAsync()
     {
-        await sessions.CreateAsync(Context.ConnectionId, AccountId, Username, rosterRepo, ledgerRepo, accountRepo, pendingWeaveRepo, pendingBossHatchRepo);
+        await sessions.CreateAsync(Context.ConnectionId, AccountId, Username, rosterRepo, ledgerRepo, accountRepo, pendingWeaveRepo, pendingBossHatchRepo, pendingStarterRevealRepo);
         await base.OnConnectedAsync();
     }
 
@@ -70,13 +73,34 @@ public class GameHub(
         a.Id, a.Name, a.Color.ToString(), a.Gen, a.WeaveCount, a.CurrentHp, a.MaxHp,
         Session.TeamAnimaIds.Contains(a.Id), BuildParts(a));
 
+    // GrantsShield (NEW, Hub screen session) -- distinguishes a shield-granting Buff (shield icon)
+    // from any other Buff (bolt icon), per CLAUDE.md's Skill-type icon set. Category alone can't
+    // make that distinction (both are SkillCategory.Buff); BaseShield > 0 is the real signal, same
+    // field CombatEngine.ResolveBuff itself already branches on to decide whether to apply Shield.
     private static IReadOnlyList<AnimaPartSummary> BuildParts(AnimaUnit a) =>
     [
-        new AnimaPartSummary(nameof(Part.Head), a.Head.Name, a.Head.Category.ToString()),
-        new AnimaPartSummary(nameof(Part.Frame), a.Frame.Name, a.Frame.Category.ToString()),
-        new AnimaPartSummary(nameof(Part.Tail), a.Tail.Name, a.Tail.Category.ToString()),
-        new AnimaPartSummary(nameof(Part.Crest), a.Crest.Name, a.Crest.Category.ToString()),
+        BuildPart(nameof(Part.Head), a.Head),
+        BuildPart(nameof(Part.Frame), a.Frame),
+        BuildPart(nameof(Part.Tail), a.Tail),
+        BuildPart(nameof(Part.Crest), a.Crest),
     ];
+
+    private static AnimaPartSummary BuildPart(string partName, Skill skill) => new(
+        partName, skill.Name, skill.Category.ToString(), skill.BaseShield > 0,
+        BuildSkillDescription(skill), skill.AppliedAugments.Select(a => a.ToString()).ToList());
+
+    // Plain mechanically-accurate description, synthesized from the skill's own real fields --
+    // confirmed by reading Models.Skill that no skill anywhere carries actual flavor/effect text
+    // (see AnimaPartSummary's own comment for why this isn't invented copy).
+    private static string BuildSkillDescription(Skill skill)
+    {
+        var bits = new List<string> { skill.Category.ToString() };
+        if (skill.BaseDamage > 0) bits.Add($"{skill.BaseDamage} dmg");
+        if (skill.BaseHeal > 0) bits.Add($"{skill.BaseHeal} heal");
+        if (skill.BaseShield > 0) bits.Add($"{skill.BaseShield} shield");
+        bits.Add($"{skill.EnergyCost} Energy");
+        return string.Join(" · ", bits);
+    }
 
     // Persists the Sanctum "In team" selection to AccountEntity.TeamAnimaIdsJson and updates the
     // in-memory session copy GetRoster reads from. At most 3 (a "3-Anima team" per CLAUDE.md), no
@@ -104,6 +128,35 @@ public class GameHub(
         return Task.FromResult(new LedgerSnapshot(balances));
     }
 
+    // The Hub screen's "Last delve" summary bar (NEW, Hub screen session -- this did NOT already
+    // exist anywhere in the codebase, despite the Hub mock assuming it did; see
+    // DelveHistoryRepository.LoadMostRecentForAccountAsync's own comment for why the existing
+    // per-Anima DelveHistoryEntity table is enough to derive an account-level "last Delve" from
+    // with no new table/migration needed). Null for a brand-new account that's never finished a
+    // Delve -- the client shows its own empty-state invitation line in that case.
+    //
+    // Phrasing is deliberately built only from fields DelveHistoryEntity actually stores (Outcome/
+    // FloorIndexReached/BossDefeated) -- no enemy identity or in-fight round number is recorded
+    // anywhere for a non-Boss encounter, so a Defeat/Retreat summary can only ever name the floor,
+    // not a specific enemy. A Boss Victory CAN safely name "the Warden of the Hollow" by name,
+    // since it's currently the only Boss in the roster (CLAUDE.md's Enemy Roster) -- BossDefeated
+    // is only ever true for a Victory outcome (Victory only happens via Boss win, see
+    // GrantBossVictoryRewardAsync/RecordDelveOutcomeAsync), so this isn't a guess.
+    public async Task<string?> GetLastDelveSummary()
+    {
+        var row = await delveHistoryRepo.LoadMostRecentForAccountAsync(AccountId);
+        if (row is null) return null;
+
+        var floorDisplay = row.FloorIndexReached + 1; // 0-indexed internally, same +1 convention NodeRef/DelveEndSummary already use for display
+        return Enum.Parse<DelveOutcome>(row.Outcome) switch
+        {
+            DelveOutcome.Victory => "Defeated the Warden of the Hollow!",
+            DelveOutcome.Defeat => $"Fell on Floor {floorDisplay}.",
+            DelveOutcome.Retreat => $"Retreated from the Delve on Floor {floorDisplay}.",
+            _ => null,
+        };
+    }
+
     // The Collection screen's Artifact list: the full 12-Artifact catalog (SampleArtifacts, the
     // same "the full Artifact roster" source ShopService/the Delve simulation already use) joined
     // against this account's discovered/won-with stats. Discovered is now real for anything ever
@@ -127,8 +180,8 @@ public class GameHub(
     // Anima Profile's dedicated read: this account's roster is already fully loaded in-memory
     // (Session.Roster), so Parent/Echo-Twin NAMES are resolved here too rather than making the
     // client issue a second lookup per link. GenomeFactory.CreateGenome is the single "genome for
-    // any roster Anima" entry point (real stored R1/R2 for Weave/Boss-hatch, the synthesized
-    // placeholder for the starter trio) -- see its own comment.
+    // any roster Anima" entry point (real stored R1/R2 for Weave/Boss-hatch/the real starter trio,
+    // the synthesized placeholder only for bare SampleAnimas test fixtures) -- see its own comment.
     public async Task<AnimaDetail> GetAnimaDetail(string animaId)
     {
         var anima = Session.Roster.FindById(animaId) ?? throw new HubException($"Anima {animaId} not found in this account's roster.");
@@ -309,6 +362,79 @@ public class GameHub(
             pending.Twin is null ? null : ToPreview(pending.Twin)));
     }
 
+    // ---- Starter Anima Reveal (NEW) ----
+    //
+    // A freshly-registered account's 3 rolled starter Anima (StarterAnimaService.RollStarterTrio,
+    // rolled at AuthService.RegisterAsync time -- see PendingStarterReveal's own comment) sit here
+    // until GetPendingStarterReveal/ConfirmStarterAnima names all of them, one at a time, strictly
+    // in order. Same mandatory-naming, no-discard contract PendingWeave/PendingBossHatch already
+    // have -- there is no "skip" or "reroll" path here either.
+
+    // Shared by GetPendingStarterReveal and ConfirmStarterAnima's response -- the REMAINING unnamed
+    // entries only (never the already-confirmed ones), each still carrying its ORIGINAL 1-based
+    // slot number (SlotNumber) out of the fixed TotalCount=3, so a resumed naming flow reads "2 of
+    // 3" after slot 1 was already confirmed, not "1 of 2".
+    private IReadOnlyList<StarterRevealEntry> BuildStarterRevealEntries(PendingStarterReveal pending) =>
+        pending.Rolls
+            .Select((roll, i) => (roll, i))
+            .Where(t => t.i >= pending.NextUnnamedIndex)
+            .Select(t => new StarterRevealEntry(t.i + 1, pending.Rolls.Count, t.roll.ArchetypeName, ToPreview(t.roll.Genome)))
+            .ToList();
+
+    // Reconnect support, same spirit as GetPendingWeave/GetPendingBossHatch. Empty list (not null)
+    // when nothing is pending, since "0 remaining" and "never had any" look identical to a client
+    // that just wants to know whether it needs to show the reveal screen right now.
+    public Task<IReadOnlyList<StarterRevealEntry>> GetPendingStarterReveal()
+    {
+        var pending = Session.PendingStarterReveal;
+        return Task.FromResult<IReadOnlyList<StarterRevealEntry>>(pending is null ? [] : BuildStarterRevealEntries(pending));
+    }
+
+    // Confirms whichever slot is CURRENT (Session.PendingStarterReveal.NextUnnamedIndex) -- there is
+    // deliberately no slot-index parameter, since naming is strictly sequential (matches the
+    // client's own "1 of 3, then 2 of 3, then 3 of 3" progress UI; there's no reason to let a client
+    // name slot 3 before slot 1). Materializes via AnimaMaterializationService's Boss-hatch-shaped
+    // overload (no parents, Gen 1 -- a starter genome is structurally identical, see
+    // StarterAnimaService's own comment), adds to SanctumRoster, persists, advances the index, and
+    // deletes the whole pending row once all 3 are named -- same "confirm clears/advances state"
+    // shape ConfirmWeave/ConfirmBossHatch already have.
+    //
+    // Auto-team-assign (NEW): the moment all 3 are named, the 3 just-materialized Anima are set as
+    // the active team automatically -- a brand-new player should land on Hub with their starter
+    // trio already active, not see "No team selected yet" until they manually visit Sanctum. This
+    // is the ONLY place team assignment ever happens automatically; every subsequent SetTeam call
+    // (swapping in a Weave/Boss-hatch Anima later) stays fully manual, exactly as it already was --
+    // this method doesn't change SetTeam's own behavior or guards at all.
+    public async Task<StarterAnimaConfirmResult> ConfirmStarterAnima(ConfirmStarterAnimaRequest request)
+    {
+        var pending = Session.PendingStarterReveal ?? throw new HubException("No pending starter Anima to confirm.");
+        if (string.IsNullOrWhiteSpace(request.Name)) throw new HubException("A name is required.");
+        if (pending.NextUnnamedIndex >= pending.Rolls.Count) throw new HubException("All starter Anima are already named.");
+
+        var roll = pending.Rolls[pending.NextUnnamedIndex];
+        var anima = AnimaMaterializationService.Create(roll.Genome, request.Name, Session.Roster);
+        await rosterRepo.SaveAnimaAsync(AccountId, anima);
+
+        pending.NextUnnamedIndex++;
+        pending.ConfirmedAnimaIds.Add(anima.Id);
+
+        if (pending.NextUnnamedIndex >= pending.Rolls.Count)
+        {
+            Session.TeamAnimaIds = pending.ConfirmedAnimaIds;
+            await accountRepo.SaveTeamAsync(AccountId, Session.TeamAnimaIds);
+
+            Session.PendingStarterReveal = null;
+            await pendingStarterRevealRepo.DeleteAsync(AccountId);
+        }
+        else
+        {
+            await pendingStarterRevealRepo.SaveAsync(AccountId, pending);
+        }
+
+        var remaining = Session.PendingStarterReveal is null ? [] : BuildStarterRevealEntries(pending);
+        return new StarterAnimaConfirmResult(ToSummary(anima), remaining);
+    }
+
     // Minimal team-selection: looks the 3 requested Animas up in this account's already-loaded
     // roster (no cross-account lookup possible, since Session.Roster only ever contains rows this
     // account's SanctumRosterRepository.LoadAsync returned) and starts a fresh DelveRun exactly the
@@ -323,6 +449,14 @@ public class GameHub(
         // (ConfirmBossHatch is the only thing that clears it), not just inconvenient to revisit.
         if (Session.PendingBossHatch is not null)
             throw new HubException("A Boss-hatch Anima is still pending a name -- confirm it before starting another Delve.");
+
+        // Same guard shape as the PendingBossHatch check above (NEW, starter-trio feature) -- a
+        // brand-new account's 3 rolled starter Anima are the account's only usable team until named,
+        // so starting a Delve is nonsensical anyway (StartDelve's own team lookup would just fail to
+        // resolve them), but this gives a clear, specific rejection instead of a confusing "Anima not
+        // found in roster" one.
+        if (Session.PendingStarterReveal is not null)
+            throw new HubException("Your starter Anima still need names -- confirm them before starting a Delve.");
 
         var team = request.TeamAnimaIds
             .Select(id => Session.Roster.FindById(id) ?? throw new HubException($"Anima {id} not found in this account's roster."))
@@ -623,6 +757,119 @@ public class GameHub(
         if (droppedEmber is { } color) Session.PendingEmbers.Enqueue(color);
 
         return new BuyWaresArtifactResult(artifact.Name, artifact.Description, await GetPendingEmberColorsAsync());
+    }
+
+    // ---- Reforge (PORTED THIS SESSION, alongside the map odds going from 0% back to 5% -- see
+    // CLAUDE.md's Map Generation section) ----
+    //
+    // Color-first flow (REORDERED, was Part-first): GetReforgeBrowseOptions (pick a color, browse
+    // all 3 Parts' skills for it) -> GetReforgeValidTargets (pick a target Anima, no-op ones
+    // skipped/disabled) -> AcceptReforge/DeclineReforge (confirm or back out). Unlike Shop's
+    // EnsureShopVisited, ArtifactService.OnNodeVisited firing (via EnsureReforgeVisited below) is
+    // deliberately decoupled from node-clearing: browsing must NOT clear the node, since the player
+    // can look at multiple colors/skills/targets before committing, and (per the task's own
+    // requirement) a rejected AcceptReforge (insufficient Wisp) must leave the node resolvable
+    // again -- so only a SUCCESSFUL AcceptReforge or an explicit DeclineReforge ever calls
+    // MarkCurrentNodeCleared.
+
+    // Fires ArtifactService.OnNodeVisited exactly once per Reforge node visit -- the first time the
+    // player calls ANY Reforge hub method for this node, regardless of which one comes first (same
+    // "fire once, regardless of action order" shape EnsureShopVisited already uses for Shop, just
+    // with no stock to roll/cache here). Also the shared RequireUnclearedNode guard every Reforge
+    // method needs.
+    private async Task EnsureReforgeVisited(DelveRun run)
+    {
+        RequireUnclearedNode(run, MapNodeType.Reforge);
+
+        if (Session.ReforgeVisitedNode == run.CurrentNode) return;
+
+        ArtifactService.OnNodeVisited(run.RunLedger, run.Team);
+        foreach (var member in run.Team) await rosterRepo.SaveAnimaAsync(AccountId, member);
+
+        Session.ReforgeVisitedNode = run.CurrentNode;
+    }
+
+    private static ReforgeCandidate ResolveReforgeCandidate(string skillName) =>
+        ReforgePartPool.All.FirstOrDefault(c => c.Skill.Name == skillName)
+            ?? throw new HubException($"Unknown Reforge skill '{skillName}'.");
+
+    // Step 1: every Head/Frame/Tail skill for the picked color, unfiltered (no target-owned-skill
+    // exclusion -- the target Anima isn't picked until the NEXT step now, see
+    // ReforgeService.GetBrowseOptionsByColor's own comment for why that filter moved).
+    public async Task<IReadOnlyList<ReforgeSkillOption>> GetReforgeBrowseOptions(GetReforgeBrowseOptionsRequest request)
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        await EnsureReforgeVisited(run);
+
+        if (!Enum.TryParse<AnimaColor>(request.Color, out var color))
+            throw new HubException($"Unknown color '{request.Color}'.");
+
+        return ReforgeService.GetBrowseOptionsByColor(color)
+            .Select(c => new ReforgeSkillOption(c.ArchetypeName, c.Skill.Name, c.Skill.Part.ToString(), c.Skill.Color?.ToString() ?? ""))
+            .ToList();
+    }
+
+    // Step 2: of this Delve's active team, who's a valid pick for this specific skill -- i.e. NOT a
+    // no-op (see ReforgeService.IsNoOpForTarget). Per-target Cost is included (Ember Core-adjusted)
+    // so the client's confirm screen has the real charge for whichever target ends up picked,
+    // without a separate preview call.
+    public Task<ReforgeValidTargetsResult> GetReforgeValidTargets(ReforgeValidTargetsRequest request)
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        RequireUnclearedNode(run, MapNodeType.Reforge);
+
+        var candidate = ResolveReforgeCandidate(request.SkillName);
+
+        var validTargets = ReforgeService.GetValidTargets(run.Team, candidate.Skill, run)
+            .Select(a => new ReforgeTargetOption(
+                a.Id, ArtifactService.ApplyEmberCoreDiscount(ReforgeService.GetAcceptCost(candidate.Skill, a), run.RunLedger)))
+            .ToList();
+
+        var validIds = validTargets.Select(t => t.AnimaId).ToHashSet();
+        var invalidIds = run.Team.Select(a => a.Id).Where(id => !validIds.Contains(id)).ToList();
+
+        return Task.FromResult(new ReforgeValidTargetsResult(validTargets, invalidIds));
+    }
+
+    // Step 4 (confirm/Accept): commits the run-scoped override. Returns a DISTINCT
+    // InsufficientWisp outcome rather than throwing (see AcceptReforgeResult's own comment) -- on
+    // that path nothing is spent, no override is recorded, and the node stays uncleared, so the
+    // client can route back to the Reforge/Leave landing screen and the player can retry with a
+    // cheaper pick or Decline. `target` not being a valid (non-no-op) pick here is a caller-contract
+    // violation (the client is expected to have already filtered via GetReforgeValidTargets), not a
+    // normal user-facing rejection -- same posture ResolvePlayerAction/SubmitAction's "illegal
+    // target" check already takes for Combat.
+    public async Task<AcceptReforgeResult> AcceptReforge(AcceptReforgeRequest request)
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        await EnsureReforgeVisited(run);
+
+        var candidate = ResolveReforgeCandidate(request.SkillName);
+        var target = run.Team.FirstOrDefault(a => a.Id == request.AnimaId)
+            ?? throw new HubException($"Anima {request.AnimaId} is not on this Delve's active team.");
+
+        if (ReforgeService.IsNoOpForTarget(target, candidate.Skill, run))
+            throw new HubException($"{candidate.Skill.Name} is already equipped in that Part for {target.Id} -- pick a different skill or target.");
+
+        var result = ReforgeService.Accept(run, target, candidate.Skill, Session.Ledger, run.RunLedger);
+
+        if (result.Success)
+        {
+            run.MarkCurrentNodeCleared();
+            await ledgerRepo.SaveAsync(AccountId, Session.Ledger);
+        }
+
+        return new AcceptReforgeResult(result.Outcome.ToString(), result.Cost, result.WispBalance);
+    }
+
+    // "Decline is free, nothing changes" (CLAUDE.md) -- the only server-side effect is marking the
+    // node cleared so the player can move on. No ledger/roster/DelveRun-override writes at all.
+    public async Task DeclineReforge()
+    {
+        var run = Session.ActiveDelveRun ?? throw new HubException("No active Delve for this connection.");
+        await EnsureReforgeVisited(run);
+
+        run.MarkCurrentNodeCleared();
     }
 
     // ---- Combat (Phase 5a: core loop only) ----
@@ -1087,13 +1334,27 @@ public class GameHub(
         _ => throw new HubException($"Unknown part '{part}'."),
     };
 
+    // AllNodes/Artifacts (NEW, Delve map screen session) -- see DelveMapNode/HeldArtifactSummary's
+    // own comments in GameHubModels.cs for why these weren't already here. Boss is appended
+    // separately since it lives outside run.Map.Floors (MapGenerator.Generate never adds it to the
+    // 7-wide grid -- see MapNode's own FloorIndex/Column comment).
     private static DelveStatus BuildStatus(DelveRun run)
     {
         NodeRef ToRef(MapNode n) => new(n.FloorIndex, n.Column, n.Type?.ToString());
 
+        var allNodes = run.Map.Floors
+            .SelectMany(floor => floor)
+            .Append(run.Map.Boss)
+            .Select(n => new DelveMapNode(n.FloorIndex, n.Column, n.Type?.ToString(), run.ClearedNodes.Contains(n), n.Next.Select(ToRef).ToList()))
+            .ToList();
+
+        var artifacts = run.CurrentArtifacts.Select(a => new HeldArtifactSummary(a.Name, a.Description)).ToList();
+
         return new DelveStatus(
             run.CurrentNode is null ? null : ToRef(run.CurrentNode),
             run.AvailableNodes.Select(ToRef).ToList(),
-            run.WispEarnedSoFar);
+            run.WispEarnedSoFar,
+            allNodes,
+            artifacts);
     }
 }
