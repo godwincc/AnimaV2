@@ -1,11 +1,21 @@
 extends Control
 
-## The real Delve map screen (new -- replaces Hub's "The Delve screen isn't built yet." status
-## message). Map only, per this task's scope: Combat/Resource/Treasure/Shop/Reforge node screens
-## don't exist yet, so arriving at ANY node type shows a "not built yet" placeholder status, same
-## precedent Hub's own stub already set. Since Floor 1 is always fixed to Combat (see CLAUDE.md's
-## Map Generation section), a real Delve genuinely cannot progress past its first node until the
-## Combat screen ships -- that's expected this session, not a bug.
+## The real Delve map screen (replaces Hub's old "The Delve screen isn't built yet." status
+## message). Resource and Treasure node screens are now real (see resource_node.gd/treasure_node.gd);
+## Combat/Elite/Boss/Shop/Reforge still show the "not built yet" placeholder status on arrival, same
+## precedent Hub's own stub already set -- untouched this session, per that task's own scope note.
+## Since Floor 1 is always fixed to Combat (see CLAUDE.md's Map Generation section), a real Delve
+## still can't reach a Resource/Treasure node through normal play until Combat ships -- see the DEV
+## ONLY panel below for how this got tested this session anyway.
+##
+## NODE ENCOUNTER ARCHITECTURE: resource_node.tscn/treasure_node.tscn are instanced as CHILD panels
+## of this scene's NodeEncounterOverlay, sharing THIS script's own _hub connection, rather than
+## being reached via change_scene_to_file like every top-level screen (Hub/Sanctum/etc.) is. See
+## resource_node.gd's own top-of-file comment for the full reasoning: a real scene change would
+## tear down the connection that owns the in-progress DelveRun (ActiveDelveRun is in-memory,
+## per-connection, no server-side resume), so returning to a FRESH delve.tscn afterward would lose
+## the run or force a brand-new StartDelve(), wiping map progress. Same class of deviation as the
+## Hub-portal fix from the map-screen session, applied one level deeper.
 ##
 ## ENTRY POINT DEVIATION (flagged explicitly): the task asked for hub.gd's portal press handler to
 ## call StartDelve() itself and then navigate here. That would break immediately given this
@@ -27,10 +37,20 @@ extends Control
 ## augment badge + hover text on skill chips) had no wire data to read before this. See
 ## GameHubModels.cs's own comments on DelveMapNode/HeldArtifactSummary/AnimaPartSummary for why.
 ##
-## GetDelveStatus() is intentionally NOT called anywhere in this script: StartDelve/MoveToNode both
-## already return a full, freshly-built DelveStatus every time they're invoked, so there's no gap
-## for a separate status re-fetch to fill on this single-player, no-polling screen. Wire it in as an
-## explicit "Refresh" affordance later if a real need for one ever shows up.
+## GetDelveStatus() (NEW this session) IS now called, exactly once: after a Resource/Treasure
+## encounter resolves. CollectResourceNode/ClaimTreasureNode don't return a DelveStatus themselves
+## (they return their own reward-shaped result), so this is the one real gap StartDelve/MoveToNode's
+## own return values don't already fill -- confirming last session's own note that it'd be added
+## "if a real need for one ever shows up."
+##
+## DEV ONLY force-node panel (flagged loudly in the UI itself, not just here): calls the REAL,
+## unmodified MoveToNode repeatedly, walking the REAL map graph (BFS over AllNodes.NextRefs) from
+## the current position to the nearest Resource/Treasure node, one real hop at a time -- it does NOT
+## bypass the server's own AvailableNodes check (MoveToNode already rejects anything not adjacent to
+## CurrentNode, confirmed by reading DelveRun.TryMoveTo; nothing server-side was changed to support
+## this). This only exists because Floor 1 is fixed Combat and no Combat screen exists yet, so normal
+## play can never click past it -- strip this panel out once Combat ships and real traversal covers
+## this testing need on its own.
 
 const SERVER_WS_URL := "ws://localhost:5143/hubs/game"
 const LOGIN_SCENE := "res://scenes/login.tscn"
@@ -48,7 +68,13 @@ const COLOR_TEXT_MUTED := "a89680"
 const COLOR_ACCENT_AMBER := "e8a03a"
 const COLOR_ERROR := "e2554a"
 
-const IDLE_MESSAGE := "Select a reachable node to move, or tap a skill chip for details."
+## Split into two independent strips (live-testing feedback) -- the map-confirm bar and this info
+## bar used to share one message area far from the map, so a node selection and a skill hover
+## silently overwrote each other. Map-confirm stays idle-EMPTY; this one gets its own idle hint
+## since it's the one that still needs one. GENERALIZED (this session) beyond skill chips: Artifact
+## sidebar rows now tap/hover into the exact same strip, so its name/state are no longer
+## skill-specific -- one consistent "tap something, read about it down here" pattern screen-wide.
+const IDLE_INFO_MESSAGE := "Tap a skill chip or artifact for details."
 
 # Skill-type icon color coding, identical to hub.gd/sanctum.gd's own ICON_COLORS (same locked Icon
 # Conventions) -- used for the Team panel's skill chips, NOT the map's own node-type icons below.
@@ -125,20 +151,26 @@ const ZOOM_MAX := 2.0
 
 const ICON_GLYPH_SCRIPT := preload("res://scripts/icon_glyph.gd")
 const DELVE_MAP_NODE_SCRIPT := preload("res://scripts/delve_map_node.gd")
+const RESOURCE_NODE_SCENE := preload("res://scenes/resource_node.tscn")
+const TREASURE_NODE_SCENE := preload("res://scenes/treasure_node.tscn")
 
 @onready var _background: TextureRect = $Background
+@onready var _dev_force_resource_button: Button = $Margin/Content/DevPanel/DevMargin/DevRow/DevForceResourceButton
+@onready var _dev_force_treasure_button: Button = $Margin/Content/DevPanel/DevMargin/DevRow/DevForceTreasureButton
+@onready var _node_encounter_overlay: Control = $NodeEncounterOverlay
 @onready var _content: VBoxContainer = $Margin/Content
 @onready var _status_label: Label = $Margin/Content/StatusLabel
 @onready var _title_label: Label = $Margin/Content/HeaderRow/TitleLabel
 @onready var _retreat_button: Button = $Margin/Content/HeaderRow/RetreatButton
-@onready var _map_scroll: DelveMapScroll = $Margin/Content/MapScroll
-@onready var _map_canvas: DelveMapCanvas = $Margin/Content/MapScroll/MapCanvas
+@onready var _map_scroll: DelveMapScroll = $Margin/Content/MapBox/MapBoxMargin/MapScroll
+@onready var _map_canvas: DelveMapCanvas = $Margin/Content/MapBox/MapBoxMargin/MapScroll/MapCanvas
 @onready var _team_list: VBoxContainer = $Margin/Content/BottomRow/TeamPanel/TeamList
 @onready var _resource_list: VBoxContainer = $Margin/Content/BottomRow/Sidebar/ResourceList
 @onready var _artifact_list: VBoxContainer = $Margin/Content/BottomRow/Sidebar/ArtifactList
-@onready var _message_label: Label = $Margin/Content/MessageBar/MessageMargin/MessageRow/MessageLabel
-@onready var _enter_node_button: Button = $Margin/Content/MessageBar/MessageMargin/MessageRow/EnterNodeButton
-@onready var _cancel_button: Button = $Margin/Content/MessageBar/MessageMargin/MessageRow/CancelButton
+@onready var _map_confirm_label: Label = $Margin/Content/MapConfirmBar/MapConfirmMargin/MapConfirmRow/MapConfirmLabel
+@onready var _enter_node_button: Button = $Margin/Content/MapConfirmBar/MapConfirmMargin/MapConfirmRow/EnterNodeButton
+@onready var _cancel_button: Button = $Margin/Content/MapConfirmBar/MapConfirmMargin/MapConfirmRow/CancelButton
+@onready var _info_label: Label = $Margin/Content/InfoBar/InfoMargin/InfoLabel
 @onready var _retreat_overlay: Control = $RetreatOverlay
 @onready var _retreat_confirm_button: Button = $RetreatOverlay/CenterContainer/ModalPanel/ModalMargin/ModalContent/ModalButtonRow/RetreatConfirmButton
 @onready var _retreat_cancel_button: Button = $RetreatOverlay/CenterContainer/ModalPanel/ModalMargin/ModalContent/ModalButtonRow/RetreatCancelButton
@@ -151,7 +183,7 @@ var _hub: HubConnection
 var _roster: Array = []
 var _current_status: Dictionary = {}
 var _selected_node: Variant = null # Dictionary (a NodeRef-shaped entry from AvailableNodes) or null
-var _hovered_skill_text: String = ""
+var _hovered_info_text: String = ""
 var _zoom: float = 1.0
 var _map_canvas_base_size: Vector2 = Vector2(800, 300)
 var _node_views: Dictionary = {} # "floorIndex,column" -> Dictionary{view, data, pos}
@@ -166,6 +198,8 @@ func _ready() -> void:
 	_cancel_button.pressed.connect(_on_cancel_pressed)
 	_return_to_hub_button.pressed.connect(func(): get_tree().change_scene_to_file(HUB_SCENE))
 	_map_scroll.zoom_requested.connect(_on_zoom_requested)
+	_dev_force_resource_button.pressed.connect(_on_dev_force_node.bind("Resource"))
+	_dev_force_treasure_button.pressed.connect(_on_dev_force_node.bind("Treasure"))
 
 	if not AuthState.is_authenticated():
 		_set_status("No active session -- returning to Login.", true)
@@ -209,7 +243,8 @@ func _run() -> void:
 	_render_team()
 	_render_resources(ledger if ledger is Dictionary else {})
 	_render_artifacts()
-	_update_message_area()
+	_update_map_confirm_bar()
+	_update_info_bar()
 
 
 # ---- Map rendering ----
@@ -319,7 +354,7 @@ func _on_map_node_pressed(node_data: Dictionary) -> void:
 	# driver script clicking through the actual scene, not assumed -- this would have hit every real
 	# mouse click too, not just the driver.
 	call_deferred("_render_map")
-	_update_message_area()
+	_update_map_confirm_bar()
 
 
 func _on_zoom_requested(factor: float) -> void:
@@ -332,33 +367,40 @@ func _apply_zoom() -> void:
 	_map_canvas.custom_minimum_size = _map_canvas_base_size * _zoom
 
 
-# ---- Node selection / move confirm (docked message area) ----
+# ---- Node selection / move confirm (its own strip, directly below the boxed map) ----
+# Independent from the skill-info strip below -- a node selection and a skill hover used to share
+# one message area and silently overwrite each other (live-testing feedback); now each has its own
+# strip and its own state, so neither can stomp the other.
 
-func _update_message_area() -> void:
+func _update_map_confirm_bar() -> void:
 	if _selected_node is Dictionary:
 		var floor_display := int(_selected_node.get("floorIndex", 0)) + 1
 		var type_name := str(_selected_node.get("type", "?"))
-		_message_label.text = "Move to the %s node on Floor %d?" % [type_name, floor_display]
+		_map_confirm_label.text = "Move to the %s node on Floor %d?" % [type_name, floor_display]
 		_enter_node_button.visible = true
 		_cancel_button.visible = true
-	elif _hovered_skill_text != "":
-		_message_label.text = _hovered_skill_text
-		_enter_node_button.visible = false
-		_cancel_button.visible = false
 	else:
-		_message_label.text = IDLE_MESSAGE
+		_map_confirm_label.text = ""
 		_enter_node_button.visible = false
 		_cancel_button.visible = false
 
 
-func _set_hovered_skill(text: String) -> void:
-	_hovered_skill_text = text
-	_update_message_area()
+# ---- Hover/tap info (its own strip, below the Team panel) -- shared by skill chips AND Artifact
+# sidebar rows (GENERALIZED this session; used to be skill-chip-only). One consistent "tap
+# something, read about it down here" interaction across the whole screen.
+
+func _update_info_bar() -> void:
+	_info_label.text = _hovered_info_text if _hovered_info_text != "" else IDLE_INFO_MESSAGE
 
 
-func _clear_hovered_skill() -> void:
-	_hovered_skill_text = ""
-	_update_message_area()
+func _set_hovered_info(text: String) -> void:
+	_hovered_info_text = text
+	_update_info_bar()
+
+
+func _clear_hovered_info() -> void:
+	_hovered_info_text = ""
+	_update_info_bar()
 
 
 func _on_enter_node_pressed() -> void:
@@ -375,26 +417,157 @@ func _on_enter_node_pressed() -> void:
 	_current_status = result
 	_render_map()
 	_render_artifacts()
-	_update_message_area()
-	_show_node_placeholder(result)
+	_update_map_confirm_bar()
+	_handle_node_arrival(result)
 
 
 func _on_cancel_pressed() -> void:
 	_selected_node = null
 	_render_map()
-	_update_message_area()
+	_update_map_confirm_bar()
 
 
-# Every node type resolves to the same "not built yet" placeholder this session -- Combat/Resource/
-# Treasure/Shop/Reforge screens don't exist yet (this task's own scope note), so there is nothing
-# real to branch into per type. Reuses the top status line, same precedent Hub's own
-# "The Delve screen isn't built yet." stub already set, rather than inventing a new UI element for
-# a message that says the same kind of thing.
-func _show_node_placeholder(status: Dictionary) -> void:
+# Resource/Treasure now open their real screens (as child panels -- see this file's own top-of-file
+# comment for why). Combat/Elite/Boss/Shop/Reforge still fall through to the "not built yet"
+# placeholder, UNCHANGED from before -- those screens don't exist yet and this task's scope note
+# explicitly leaves them alone.
+func _handle_node_arrival(status: Dictionary) -> void:
 	var current: Variant = status.get("currentNode")
 	if not (current is Dictionary): return
 	var type_name := str(current.get("type", "This"))
-	_set_status("%s node -- not built yet." % type_name, false)
+	match type_name:
+		"Resource": _open_node_encounter(RESOURCE_NODE_SCENE)
+		"Treasure": _open_node_encounter(TREASURE_NODE_SCENE)
+		_: _set_status("%s node -- not built yet." % type_name, false)
+
+
+# ---- Resource/Treasure node encounters (child panels, share this scene's own _hub) ----
+
+func _open_node_encounter(scene: PackedScene) -> void:
+	for child in _node_encounter_overlay.get_children():
+		child.free()
+
+	var instance := scene.instantiate() as Control
+	_node_encounter_overlay.add_child(instance)
+	_node_encounter_overlay.visible = true
+	# String-based connect()/call() (not instance.resolved.connect(...) / instance.start(...)) --
+	# instance's static type is plain Control (resource_node.gd/treasure_node.gd have no shared
+	# class_name to type this as), same reasoning as the map nodes' own connect() usage above.
+	instance.connect("resolved", _on_node_encounter_resolved.bind(instance))
+	instance.call("start", _hub)
+
+
+func _on_node_encounter_resolved(instance: Control) -> void:
+	_node_encounter_overlay.visible = false
+	instance.queue_free()
+	await _refresh_after_node_resolution()
+
+
+# CollectResourceNode/ClaimTreasureNode return their own reward-shaped result, not a DelveStatus --
+# GetDelveStatus (unused everywhere else in this script) is the one real gap that leaves for the
+# map's cleared-state/Artifacts to catch up on, per this file's own top-of-file comment.
+func _refresh_after_node_resolution() -> void:
+	var status: Variant = await _hub.invoke("GetDelveStatus", [])
+	if status is Dictionary:
+		_current_status = status
+		_render_map()
+		_render_artifacts()
+
+	var ledger: Variant = await _hub.invoke("GetLedger", [])
+	_render_resources(ledger if ledger is Dictionary else {})
+	_update_map_confirm_bar()
+
+
+# ---- DEV ONLY: force-reach a Resource/Treasure node for manual testing ----
+# See this file's own top-of-file comment: this walks the REAL map graph via repeated real
+# MoveToNode calls (never a fabricated/forced server state) -- strip this panel out once Combat
+# exists and normal play can reach Floor 6+ on its own.
+
+## Deliberately does NOT special-case "already standing on a matching node" -- a real bug caught by
+## this session's own driver script: the current node might already be CLEARED (its own encounter
+## already resolved), in which case re-triggering it just throws ("already cleared") instead of
+## walking to the NEXT occurrence. _dev_find_path_to_type always requires at least one real hop, so
+## it naturally walks past an already-cleared current position to find the next real match, whether
+## standing on one or not.
+func _on_dev_force_node(type_name: String) -> void:
+	var path := _dev_find_path_to_type(type_name)
+	if path.is_empty():
+		_set_status("DEV: no reachable %s node found on this map." % type_name, true)
+		return
+
+	_set_status("DEV: auto-walking to a %s node (%d hop%s)..." % [type_name, path.size(), "" if path.size() == 1 else "s"], false)
+
+	var result: Variant = null
+	for step: Dictionary in path:
+		var request := {"floorIndex": int(step.get("floorIndex", 0)), "column": int(step.get("column", 0))}
+		result = await _hub.invoke("MoveToNode", [request])
+		if not (result is Dictionary):
+			_set_status("DEV: auto-walk failed mid-path -- check your connection.", true)
+			return
+		_current_status = result
+
+	_selected_node = null
+	_render_map()
+	_render_artifacts()
+	_update_map_confirm_bar()
+	_handle_node_arrival(result)
+
+
+# Plain BFS over AllNodes' real NextRefs adjacency, starting from CurrentNode (or every Floor-1
+# start node if none yet) -- returns the ordered list of node entries to MoveToNode through, one
+# real hop at a time, EXCLUDING the start node. Empty if no matching node is reachable at all
+# (e.g. a Boss-only remaining path, or a freak map with neither type rolled anywhere ahead).
+func _dev_find_path_to_type(type_name: String) -> Array:
+	var all_nodes: Array = _current_status.get("allNodes", [])
+	var by_key: Dictionary = {}
+	for n: Variant in all_nodes:
+		if n is Dictionary:
+			by_key[_node_key(n)] = n
+
+	var visited: Dictionary = {}
+	var queue: Array = []
+	var current: Variant = _current_status.get("currentNode")
+
+	if current is Dictionary:
+		# Real current position, zero hops taken -- matching THIS node is already handled by the
+		# caller before this ever runs, so it seeds the search but is never itself a valid return
+		# (a length-0 "path" would mean "call MoveToNode on where we already are", which isn't real).
+		var start_key := _node_key(current)
+		visited[start_key] = true
+		queue.append({"key": start_key, "path": []})
+	else:
+		# No move yet this Delve -- every AvailableNodes entry is already a real, valid ONE-hop
+		# MoveToNode target in its own right (there is no "already there" yet to exclude), so each
+		# seeds the queue with a length-1 path, not length-0.
+		for n: Variant in _current_status.get("availableNodes", []):
+			if not (n is Dictionary): continue
+			var key := _node_key(n)
+			if visited.has(key): continue
+			visited[key] = true
+			queue.append({"key": key, "path": [n]})
+
+	while not queue.is_empty():
+		var entry: Dictionary = queue.pop_front()
+		var node_data: Dictionary = by_key.get(entry["key"], {})
+		var hop_path: Array = entry["path"]
+		# Require at least one real hop -- the seed entry for a real CurrentNode has an empty path
+		# (that's our actual position, not a MoveToNode target); without this guard, standing on an
+		# already-cleared matching node would "find" a zero-hop path and immediately re-trigger the
+		# same cleared encounter instead of walking to the next real occurrence (see this function's
+		# own caller for the real bug this fixes).
+		if not hop_path.is_empty() and str(node_data.get("type", "")) == type_name:
+			return hop_path
+		for next_ref: Variant in node_data.get("nextRefs", []):
+			if not (next_ref is Dictionary): continue
+			var next_key := _node_key(next_ref)
+			if visited.has(next_key): continue
+			visited[next_key] = true
+			var next_node: Dictionary = by_key.get(next_key, {})
+			var new_path: Array = (entry["path"] as Array).duplicate()
+			new_path.append(next_node)
+			queue.append({"key": next_key, "path": new_path})
+
+	return []
 
 
 # ---- Team panel ----
@@ -430,14 +603,25 @@ func _render_team() -> void:
 		_team_list.add_child(_build_team_card(a))
 
 
+# Portrait-on-top vertical box (NEW this session -- was a horizontal row with portrait+name+HP on
+# the left and skills trailing off to the right). TeamList is now an HBoxContainer of 3 of these
+# side-by-side (see delve.tscn) instead of 3 stacked rows -- each box is a bit taller, but 3 across
+# nets a noticeably SHORTER Team panel overall, which is what actually matters for this screen's
+# vertical-fit budget (see this file's own top-of-file comment on that).
 func _build_team_card(anima: Dictionary) -> Control:
-	var card := HBoxContainer.new()
-	card.add_theme_constant_override("separation", 10)
+	var card := VBoxContainer.new()
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.add_theme_constant_override("separation", 3)
 
 	var color_name: String = str(anima.get("color", ""))
 	var portrait_wrap := AspectRatioContainer.new()
 	portrait_wrap.ratio = 1.0
-	portrait_wrap.custom_minimum_size = Vector2(48, 48) # see hub.gd's own comment on why this is required
+	# SHRINK_CENTER (not EXPAND_FILL) -- centers the portrait within the column's full width instead
+	# of stretching it edge-to-edge; explicit custom_minimum_size still required regardless, per
+	# hub.gd's own comment on why (a Control with real content but no minimum size collapses to
+	# invisible inside a container that doesn't infer one for it).
+	portrait_wrap.custom_minimum_size = Vector2(40, 40)
+	portrait_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 
 	if ASPECT_SPRITES.has(color_name):
 		var portrait := TextureRect.new()
@@ -451,40 +635,57 @@ func _build_team_card(anima: Dictionary) -> Control:
 		portrait_wrap.add_child(fallback)
 	card.add_child(portrait_wrap)
 
-	var info_col := VBoxContainer.new()
-	info_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	info_col.add_theme_constant_override("separation", 4)
-	card.add_child(info_col)
-
-	var name_hp_row := HBoxContainer.new()
-	info_col.add_child(name_hp_row)
-
 	var name_label := Label.new()
 	name_label.text = str(anima.get("name", "?"))
-	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM))
-	name_hp_row.add_child(name_label)
+	name_label.add_theme_font_size_override("font_size", 12)
+	card.add_child(name_label)
 
 	var hp_label := Label.new()
 	hp_label.text = "HP %d/%d" % [int(anima.get("currentHp", 0)), int(anima.get("maxHp", 0))]
+	hp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hp_label.add_theme_color_override("font_color", Color(COLOR_TEXT_MUTED))
-	hp_label.add_theme_font_size_override("font_size", 11)
-	name_hp_row.add_child(hp_label)
+	hp_label.add_theme_font_size_override("font_size", 10)
+	card.add_child(hp_label)
 
-	var chips_row := HBoxContainer.new()
-	chips_row.add_theme_constant_override("separation", 6)
-	info_col.add_child(chips_row)
+	# Compact 2x2 grid, not a single row -- 4 chips across in a narrower column (one of 3 sharing
+	# the Team panel's width now, instead of the whole panel) would either crowd or force horizontal
+	# scrolling; a grid keeps every chip's text readable at this width.
+	#
+	# Wrapped in a CenterContainer (real bug, caught via a live screenshot): "card" is a wide
+	# SIZE_EXPAND_FILL column (roughly a third of the whole Team panel), and a bare GridContainer
+	# has no size flags of its own pulling it toward any particular width -- left unwrapped, its two
+	# columns spread across the ENTIRE card width (column 1 pinned near the card's left edge, far
+	# from the portrait above it) instead of staying a tight, portrait-centered block. The
+	# CenterContainer sizes to the grid's own natural (compact) content width and centers that
+	# within the wide card, matching the portrait/name/HP above it.
+	var chips_center := CenterContainer.new()
+	card.add_child(chips_center)
+
+	var chips_grid := GridContainer.new()
+	chips_grid.columns = 2
+	chips_grid.add_theme_constant_override("h_separation", 6)
+	chips_grid.add_theme_constant_override("v_separation", 3)
+	chips_center.add_child(chips_grid)
 
 	for p: Variant in anima.get("parts", []):
 		if p is Dictionary:
-			chips_row.add_child(_build_skill_chip(p))
+			chips_grid.add_child(_build_skill_chip(p))
 
 	return card
 
 
 func _build_skill_chip(part: Dictionary) -> Control:
 	var wrapper := Control.new()
-	wrapper.custom_minimum_size = Vector2(0, 22)
+	# Explicit WIDTH too (was Vector2(0, 16), height-only) -- a real bug caught via a live
+	# screenshot: inside the Team panel's new 2-column GridContainer wrapped in a CenterContainer
+	# (see _build_team_card's own comment on why that wrapping exists), a cell with zero declared
+	# minimum width gives the GridContainer nothing to size its columns from (the icon+label row
+	# inside is anchor-positioned, which doesn't feed a minimum size back up to this wrapper), so
+	# every chip collapsed to the same zero-width point and overlapped. 100px comfortably fits this
+	# roster's longest skill names ("Guiding Light", "Bloodthirst") at this font size.
+	wrapper.custom_minimum_size = Vector2(100, 16)
 	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	wrapper.mouse_filter = Control.MOUSE_FILTER_STOP
 	wrapper.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -501,14 +702,14 @@ func _build_skill_chip(part: Dictionary) -> Control:
 	icon.set_script(ICON_GLYPH_SCRIPT)
 	icon.set("icon_kind", icon_kind)
 	icon.set("icon_color", Color(SKILL_ICON_COLORS.get(icon_kind, "e8a03a")))
-	icon.set("icon_size", 13.0)
+	icon.set("icon_size", 11.0)
 	row.add_child(icon)
 
 	var label := Label.new()
 	label.text = str(part.get("skillName", "--"))
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.add_theme_color_override("font_color", Color(COLOR_TEXT_MUTED))
-	label.add_theme_font_size_override("font_size", 11)
+	label.add_theme_font_size_override("font_size", 10)
 	row.add_child(label)
 
 	var augments: Array = part.get("appliedAugments", [])
@@ -516,20 +717,21 @@ func _build_skill_chip(part: Dictionary) -> Control:
 		wrapper.add_child(_build_augment_badge())
 
 	var description := _skill_hover_text(part)
-	wrapper.mouse_entered.connect(func(): _set_hovered_skill(description))
-	wrapper.mouse_exited.connect(func(): _clear_hovered_skill())
-	wrapper.gui_input.connect(_on_skill_chip_gui_input.bind(description))
+	wrapper.mouse_entered.connect(func(): _set_hovered_info(description))
+	wrapper.mouse_exited.connect(func(): _clear_hovered_info())
+	wrapper.gui_input.connect(_on_info_source_gui_input.bind(description))
 
 	return wrapper
 
 
-# Tapping a chip shows the same info hovering it would (desktop hover has no equivalent on the Web
-# export's touch paths, per this task's own instruction) -- it persists until something else
-# changes the message area (another chip, a node selection), rather than trying to fake a
-# touch "mouse_exited" that doesn't really exist.
-func _on_skill_chip_gui_input(event: InputEvent, description: String) -> void:
+# Tapping a chip (or, GENERALIZED this session, an Artifact row) shows the same info hovering it
+# would (desktop hover has no equivalent on the Web export's touch paths) -- it persists until
+# something else changes the info bar (another chip/artifact, a node selection), rather than
+# trying to fake a touch "mouse_exited" that doesn't really exist. Shared by both info sources --
+# was skill-chip-only, renamed since it no longer is.
+func _on_info_source_gui_input(event: InputEvent, description: String) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_set_hovered_skill(description)
+		_set_hovered_info(description)
 
 
 func _skill_hover_text(part: Dictionary) -> String:
@@ -590,27 +792,27 @@ func _render_resources(ledger: Dictionary) -> void:
 
 func _build_resource_row(key: String, count: int) -> Control:
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
+	row.add_theme_constant_override("separation", 6)
 
 	var icon := Control.new()
-	icon.custom_minimum_size = Vector2(16, 16)
+	icon.custom_minimum_size = Vector2(13, 13)
 	icon.set_script(ICON_GLYPH_SCRIPT)
 	icon.set("icon_kind", RESOURCE_ICONS.get(key, "sparkle"))
 	icon.set("icon_color", Color(COLOR_ACCENT_AMBER))
-	icon.set("icon_size", 16.0)
+	icon.set("icon_size", 13.0)
 	row.add_child(icon)
 
 	var label := Label.new()
 	label.text = str(RESOURCE_LABELS.get(key, key))
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.add_theme_color_override("font_color", Color(COLOR_TEXT_MUTED))
-	label.add_theme_font_size_override("font_size", 12)
+	label.add_theme_font_size_override("font_size", 11)
 	row.add_child(label)
 
 	var count_label := Label.new()
 	count_label.text = str(count)
 	count_label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM))
-	count_label.add_theme_font_size_override("font_size", 13)
+	count_label.add_theme_font_size_override("font_size", 12)
 	row.add_child(count_label)
 
 	return row
@@ -628,8 +830,14 @@ func _render_artifacts() -> void:
 			_artifact_list.add_child(_build_empty_artifact_slot())
 
 
+# Icon + name only, single compact line -- description moved to tap/hover into the shared info bar
+# (GENERALIZED this session, see that section's own comment), same "tap something, read about it
+# down here" pattern the skill chips already use, instead of a second, inconsistent inline-text
+# pattern living in the sidebar.
 func _build_artifact_row(artifact: Dictionary) -> Control:
 	var card := PanelContainer.new()
+	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(Color(COLOR_CARD_BG), 0.75)
@@ -639,42 +847,45 @@ func _build_artifact_row(artifact: Dictionary) -> Control:
 	card.add_theme_stylebox_override("panel", style)
 
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 8)
-	margin.add_theme_constant_override("margin_top", 6)
-	margin.add_theme_constant_override("margin_right", 8)
-	margin.add_theme_constant_override("margin_bottom", 6)
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.add_theme_constant_override("margin_left", 6)
+	margin.add_theme_constant_override("margin_top", 4)
+	margin.add_theme_constant_override("margin_right", 6)
+	margin.add_theme_constant_override("margin_bottom", 4)
 	card.add_child(margin)
 
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 6)
 	margin.add_child(row)
 
 	var icon := Control.new()
-	icon.custom_minimum_size = Vector2(20, 20)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.custom_minimum_size = Vector2(16, 16)
 	icon.set_script(ICON_GLYPH_SCRIPT)
 	icon.set("icon_kind", ARTIFACT_ICONS.get(str(artifact.get("name", "")), "sparkle"))
 	icon.set("icon_color", Color(COLOR_ACCENT_AMBER))
-	icon.set("icon_size", 20.0)
+	icon.set("icon_size", 16.0)
 	row.add_child(icon)
 
-	var text_col := VBoxContainer.new()
-	text_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(text_col)
-
 	var name_label := Label.new()
+	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	name_label.text = str(artifact.get("name", "?"))
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM))
-	name_label.add_theme_font_size_override("font_size", 12)
-	text_col.add_child(name_label)
+	name_label.add_theme_font_size_override("font_size", 11)
+	row.add_child(name_label)
 
-	var desc_label := Label.new()
-	desc_label.text = str(artifact.get("description", ""))
-	desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	desc_label.add_theme_color_override("font_color", Color(COLOR_TEXT_MUTED))
-	desc_label.add_theme_font_size_override("font_size", 10)
-	text_col.add_child(desc_label)
+	var description := _artifact_hover_text(artifact)
+	card.mouse_entered.connect(func(): _set_hovered_info(description))
+	card.mouse_exited.connect(func(): _clear_hovered_info())
+	card.gui_input.connect(_on_info_source_gui_input.bind(description))
 
 	return card
+
+
+func _artifact_hover_text(artifact: Dictionary) -> String:
+	return "%s -- %s" % [str(artifact.get("name", "?")), str(artifact.get("description", ""))]
 
 
 # Dashed border isn't natively supported by StyleBoxFlat -- approximated with a plain thin border,
@@ -682,7 +893,7 @@ func _build_artifact_row(artifact: Dictionary) -> Control:
 # codebase (e.g. sanctum.gd's square-portrait-vs-mock's-rounded-corners comment).
 func _build_empty_artifact_slot() -> Control:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(0, 36)
+	panel.custom_minimum_size = Vector2(0, 26)
 
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0, 0, 0, 0)
@@ -787,15 +998,46 @@ func _apply_theme() -> void:
 		label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM_DIM))
 		label.add_theme_font_size_override("font_size", 13)
 
-	_style_panel($Margin/Content/MessageBar)
-	_message_label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM_DIM))
-	_message_label.add_theme_font_size_override("font_size", 12)
+	_style_map_box()
+
+	_style_panel($Margin/Content/MapConfirmBar)
+	_map_confirm_label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM_DIM))
+	_map_confirm_label.add_theme_font_size_override("font_size", 12)
+
+	_style_panel($Margin/Content/InfoBar)
+	_info_label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM_DIM))
+	_info_label.add_theme_font_size_override("font_size", 12)
 
 	_style_panel($RetreatOverlay/CenterContainer/ModalPanel)
 	_style_panel($EndSummaryPanel/EndSummaryCard)
 	_end_summary_header.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM))
 	_end_summary_header.add_theme_font_size_override("font_size", 16)
 	_end_summary_text.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM_DIM))
+
+	_style_dev_panel()
+
+
+# DEV ONLY panel styling -- deliberately loud/unmistakable (hot-pink border+text, unrelated to the
+# rest of this screen's warm palette) so it reads as "not part of the real game" at a glance, per
+# this task's own "visually distinct" instruction. Strip this whole function (and the DevPanel node
+# in delve.tscn) out once Combat ships.
+func _style_dev_panel() -> void:
+	const COLOR_DEV := "ff3ea5"
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(Color(COLOR_DEV), 0.12)
+	style.border_color = Color(COLOR_DEV)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(6)
+	$Margin/Content/DevPanel.add_theme_stylebox_override("panel", style)
+
+	var dev_label: Label = $Margin/Content/DevPanel/DevMargin/DevRow/DevLabel
+	dev_label.add_theme_color_override("font_color", Color(COLOR_DEV))
+	dev_label.add_theme_font_size_override("font_size", 11)
+
+	for button: Button in [_dev_force_resource_button, _dev_force_treasure_button]:
+		button.add_theme_color_override("font_color", Color(COLOR_DEV))
+		button.add_theme_color_override("font_color_hover", Color(COLOR_DEV))
+		button.add_theme_color_override("font_color_pressed", Color(COLOR_DEV))
 
 
 func _style_panel(panel: PanelContainer) -> void:
@@ -805,3 +1047,17 @@ func _style_panel(panel: PanelContainer) -> void:
 	style.set_border_width_all(1)
 	style.set_corner_radius_all(12)
 	panel.add_theme_stylebox_override("panel", style)
+
+
+# The map's own box (NEW, live-testing feedback) -- noticeably darker/near-black than every other
+# panel on this screen (rgba(0,0,0,0.55) here vs. _style_panel's own rgba(30,22,16,0.85)) so it
+# reads as a clearly separate, boxed-off region from the Team panel below it, matching the level of
+# separation CLAUDE.md's own Combat arena design calls for ("darker inset panel... clearly
+# separated from the HUD").
+func _style_map_box() -> void:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0, 0, 0, 0.55)
+	style.border_color = Color(Color(COLOR_CARD_BORDER), 0.25)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(10)
+	$Margin/Content/MapBox.add_theme_stylebox_override("panel", style)

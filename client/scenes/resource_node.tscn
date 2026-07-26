@@ -1,0 +1,91 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/resource_node.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/icon_glyph.gd" id="2"]
+
+[node name="ResourceNodeScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Card" type="PanelContainer" parent="CenterContainer"]
+custom_minimum_size = Vector2(340, 0)
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="CenterContainer/Card"]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="Content" type="VBoxContainer" parent="CenterContainer/Card/Margin"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 8
+
+[node name="CenterpieceWrap" type="Control" parent="CenterContainer/Card/Margin/Content"]
+custom_minimum_size = Vector2(140, 140)
+layout_mode = 2
+size_flags_horizontal = 4
+
+[node name="TitleLabel" type="Label" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+horizontal_alignment = 1
+text = "A quiet cache"
+
+[node name="SubtitleLabel" type="Label" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
+text = "A small drift of wisp lingers here, unclaimed."
+
+[node name="WispRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+size_flags_horizontal = 4
+alignment = 1
+theme_override_constants/separation = 6
+
+[node name="WispIcon" type="Control" parent="CenterContainer/Card/Margin/Content/WispRow"]
+layout_mode = 2
+script = ExtResource("2")
+icon_kind = "sparkle"
+icon_color = Color(0.909804, 0.752941, 0.227451, 1)
+icon_size = 18.0
+
+[node name="WispLabel" type="Label" parent="CenterContainer/Card/Margin/Content/WispRow"]
+layout_mode = 2
+text = "+0 Wisp"
+
+[node name="StatusLabel" type="Label" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
+text = ""
+
+[node name="ButtonSlot" type="CenterContainer" parent="CenterContainer/Card/Margin/Content"]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2

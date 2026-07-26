@@ -59,18 +59,88 @@ layout_mode = 2
 focus_mode = 0
 text = "Retreat"
 
-[node name="MapScroll" type="ScrollContainer" parent="Margin/Content"]
-custom_minimum_size = Vector2(0, 340)
+[node name="DevPanel" type="PanelContainer" parent="Margin/Content"]
+layout_mode = 2
+
+[node name="DevMargin" type="MarginContainer" parent="Margin/Content/DevPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 6
+
+[node name="DevRow" type="HBoxContainer" parent="Margin/Content/DevPanel/DevMargin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="DevLabel" type="Label" parent="Margin/Content/DevPanel/DevMargin/DevRow"]
+layout_mode = 2
+text = "DEV ONLY -- remove once Combat ships:"
+
+[node name="DevForceResourceButton" type="Button" parent="Margin/Content/DevPanel/DevMargin/DevRow"]
+layout_mode = 2
+focus_mode = 0
+text = "Force Resource Node"
+
+[node name="DevForceTreasureButton" type="Button" parent="Margin/Content/DevPanel/DevMargin/DevRow"]
+layout_mode = 2
+focus_mode = 0
+text = "Force Treasure Node"
+
+[node name="MapBox" type="PanelContainer" parent="Margin/Content"]
+custom_minimum_size = Vector2(0, 250)
 layout_mode = 2
 size_flags_vertical = 3
+
+[node name="MapBoxMargin" type="MarginContainer" parent="Margin/Content/MapBox"]
+layout_mode = 2
+theme_override_constants/margin_left = 6
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 6
+theme_override_constants/margin_bottom = 6
+
+[node name="MapScroll" type="ScrollContainer" parent="Margin/Content/MapBox/MapBoxMargin"]
+layout_mode = 2
 horizontal_scroll_mode = 2
 vertical_scroll_mode = 1
 script = ExtResource("2")
 
-[node name="MapCanvas" type="Control" parent="Margin/Content/MapScroll"]
+[node name="MapCanvas" type="Control" parent="Margin/Content/MapBox/MapBoxMargin/MapScroll"]
 custom_minimum_size = Vector2(1456, 526)
 layout_mode = 2
 script = ExtResource("3")
+
+[node name="MapConfirmBar" type="PanelContainer" parent="Margin/Content"]
+layout_mode = 2
+
+[node name="MapConfirmMargin" type="MarginContainer" parent="Margin/Content/MapConfirmBar"]
+layout_mode = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 6
+
+[node name="MapConfirmRow" type="HBoxContainer" parent="Margin/Content/MapConfirmBar/MapConfirmMargin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="MapConfirmLabel" type="Label" parent="Margin/Content/MapConfirmBar/MapConfirmMargin/MapConfirmRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+autowrap_mode = 3
+text = ""
+
+[node name="EnterNodeButton" type="Button" parent="Margin/Content/MapConfirmBar/MapConfirmMargin/MapConfirmRow"]
+visible = false
+layout_mode = 2
+focus_mode = 0
+text = "Enter Node"
+
+[node name="CancelButton" type="Button" parent="Margin/Content/MapConfirmBar/MapConfirmMargin/MapConfirmRow"]
+visible = false
+layout_mode = 2
+focus_mode = 0
+text = "Cancel"
 
 [node name="BottomRow" type="HBoxContainer" parent="Margin/Content"]
 layout_mode = 2
@@ -80,20 +150,20 @@ theme_override_constants/separation = 16
 [node name="TeamPanel" type="VBoxContainer" parent="Margin/Content/BottomRow"]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 6
+theme_override_constants/separation = 4
 
 [node name="TeamHeaderLabel" type="Label" parent="Margin/Content/BottomRow/TeamPanel"]
 layout_mode = 2
 text = "Team"
 
-[node name="TeamList" type="VBoxContainer" parent="Margin/Content/BottomRow/TeamPanel"]
+[node name="TeamList" type="HBoxContainer" parent="Margin/Content/BottomRow/TeamPanel"]
 layout_mode = 2
 theme_override_constants/separation = 10
 
 [node name="Sidebar" type="VBoxContainer" parent="Margin/Content/BottomRow"]
 custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 4
 
 [node name="ResourcesHeaderLabel" type="Label" parent="Margin/Content/BottomRow/Sidebar"]
 layout_mode = 2
@@ -101,7 +171,7 @@ text = "Resources"
 
 [node name="ResourceList" type="VBoxContainer" parent="Margin/Content/BottomRow/Sidebar"]
 layout_mode = 2
-theme_override_constants/separation = 4
+theme_override_constants/separation = 2
 
 [node name="ArtifactsHeaderLabel" type="Label" parent="Margin/Content/BottomRow/Sidebar"]
 layout_mode = 2
@@ -109,39 +179,22 @@ text = "Artifacts"
 
 [node name="ArtifactList" type="VBoxContainer" parent="Margin/Content/BottomRow/Sidebar"]
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 3
 
-[node name="MessageBar" type="PanelContainer" parent="Margin/Content"]
+[node name="InfoBar" type="PanelContainer" parent="Margin/Content"]
 layout_mode = 2
 
-[node name="MessageMargin" type="MarginContainer" parent="Margin/Content/MessageBar"]
+[node name="InfoMargin" type="MarginContainer" parent="Margin/Content/InfoBar"]
 layout_mode = 2
 theme_override_constants/margin_left = 12
-theme_override_constants/margin_top = 8
+theme_override_constants/margin_top = 6
 theme_override_constants/margin_right = 12
-theme_override_constants/margin_bottom = 8
+theme_override_constants/margin_bottom = 6
 
-[node name="MessageRow" type="HBoxContainer" parent="Margin/Content/MessageBar/MessageMargin"]
+[node name="InfoLabel" type="Label" parent="Margin/Content/InfoBar/InfoMargin"]
 layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="MessageLabel" type="Label" parent="Margin/Content/MessageBar/MessageMargin/MessageRow"]
-layout_mode = 2
-size_flags_horizontal = 3
 autowrap_mode = 3
 text = ""
-
-[node name="EnterNodeButton" type="Button" parent="Margin/Content/MessageBar/MessageMargin/MessageRow"]
-visible = false
-layout_mode = 2
-focus_mode = 0
-text = "Enter Node"
-
-[node name="CancelButton" type="Button" parent="Margin/Content/MessageBar/MessageMargin/MessageRow"]
-visible = false
-layout_mode = 2
-focus_mode = 0
-text = "Cancel"
 
 [node name="RetreatOverlay" type="Control" parent="."]
 visible = false
@@ -245,3 +298,13 @@ text = ""
 layout_mode = 2
 focus_mode = 0
 text = "Return to Hub"
+
+[node name="NodeEncounterOverlay" type="Control" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1

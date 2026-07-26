@@ -39,6 +39,17 @@ const COLOR_OUTLINE := "c9b89e"
 const CIRCLE_TYPES := ["Combat", "Elite", "Boss"]
 const INTERACTIVE_STATES := ["reachable", "selected"]
 
+# Pulsing selected-ring tuning (NEW -- live-testing feedback found the old static thicker-stroke
+# "selected" treatment too subtle to read as clear click feedback at a glance). An animated ring
+# is unambiguous in a way a static color/width change isn't -- confirmed via a real click during
+# testing that the click handler itself was already firing correctly (message area updated
+# immediately); this is purely a visual-strength fix, not a functional one.
+const PULSE_SPEED := 4.0
+const PULSE_RING_BASE_OFFSET := 6.0
+const PULSE_RING_RANGE := 5.0
+
+var _pulse_time: float = 0.0
+
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(52, 52)
@@ -50,6 +61,13 @@ func _ready() -> void:
 func _apply_state() -> void:
 	modulate.a = 1.0 if visual_state in ["current", "reachable", "selected"] else 0.45
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if visual_state in INTERACTIVE_STATES else Control.CURSOR_ARROW
+	_pulse_time = 0.0
+	set_process(visual_state == "selected")
+	queue_redraw()
+
+
+func _process(delta: float) -> void:
+	_pulse_time += delta
 	queue_redraw()
 
 
@@ -86,3 +104,11 @@ func _draw() -> void:
 		if fill_color.a > 0.0:
 			draw_colored_polygon(pts, fill_color)
 		draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2], pts[3], pts[0]]), stroke_color, stroke_width, true)
+
+	# Pulsing outer ring, selected only -- an animated ring reads as "you did something" in a way a
+	# static stroke-width/color change doesn't, per this session's own live-testing feedback.
+	if is_selected:
+		var pulse: float = (sin(_pulse_time * PULSE_SPEED) + 1.0) * 0.5 # 0..1
+		var pulse_radius := radius + PULSE_RING_BASE_OFFSET + pulse * PULSE_RING_RANGE
+		var pulse_alpha := 0.35 + pulse * 0.45
+		draw_arc(c, pulse_radius, 0.0, TAU, 48, Color(COLOR_GOLD_STROKE, pulse_alpha), 2.5, true)
