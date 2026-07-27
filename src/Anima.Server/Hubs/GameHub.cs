@@ -924,6 +924,25 @@ public class GameHub(
 
         var state = new CombatState { PlayerTeam = run.Team, EnemyTeam = BuildEncounter(node.Type.Value) };
 
+        // Real bug fix (Combat Phase 2): every materialized Anima defaults to Position = 1
+        // (AnimaMaterializationService's Weave/Boss-hatch/Starter constructors all hardcode it), and
+        // nothing else ever assigned distinct front/mid/back positions before this -- confirmed live,
+        // a fresh team's 3 Anima all rendered Position 1 simultaneously in Round 1. Assigned fresh
+        // HERE (every genuine new fight, not just once at DelveRun.Start) rather than persisted
+        // Delve-wide, specifically so a PRIOR combat's in-fight Shove/Retreat/Hook moves (which do
+        // mutate Position, see CombatEngine's move-effect handlers) can never leak into the NEXT
+        // fight's starting formation -- this is the self-healing, not just first-fight-correct, fix.
+        // The idempotent-resume branch above already returns before this line, so resuming a fight
+        // in progress never resets a move effect's real mid-fight position. Order is run.Team's own
+        // list order, i.e. whatever order StartDelve's TeamAnimaIds was submitted in (today that's
+        // always the starter-trio auto-assign's fixed Crimson/Onyx/Verdant confirmation order, since
+        // no real Sanctum team-builder UI exists yet to let a player choose a different arrangement --
+        // SetTeam is a real, working RPC, just not called from anywhere in the Godot client yet). No
+        // new ordering concept needed: team list order IS the front/mid/back signal, and this
+        // generalizes correctly the moment a real team-builder UI starts calling SetTeam with a
+        // deliberate order.
+        for (var i = 0; i < state.PlayerTeam.Count && i < 3; i++) state.PlayerTeam[i].Position = i + 1;
+
         ArtifactService.OnNodeVisited(run.RunLedger, run.Team, state);
         foreach (var member in run.Team) await rosterRepo.SaveAnimaAsync(AccountId, member);
 
