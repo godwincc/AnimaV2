@@ -15,37 +15,54 @@ public static class MapGenerator
     private const int Floor14Index = 13; // Shop banned here specifically
     private const int Floor15Index = 14; // fixed Shop; Boss connects from every node here
 
-    // Map Odds Rebalance (LOCKED): Reforge set to 0% -- Option A, its old 5% spread evenly across
-    // the other 5 types (35->36, 15->16 x4). Reforge stays fully real/implemented code (RollOffer,
-    // Accept, targeting flow); this is a probability change only, re-enabled later by restoring a
-    // nonzero weight here, nothing else needs to change.
+    // Map Odds Rebalance (LOCKED, Reforge-reintroduction session): Reforge reintroduced at 5% (was
+    // 0%), the other 5 types rebalanced proportionally off the prior 36/16/16/16/16 split down to
+    // 34/15/15/15/16 (Shop kept 1 point higher than the other four non-Combat types).
     //
-    // Reforge MUST stay the LAST entry in this array for its 0.0 weight to be truly unreachable,
-    // not just "practically never" -- see AssignRandomType's weighted-roll loop: `roll` is always
-    // strictly < the cumulative total (Random.NextDouble() never returns 1.0), so the entry whose
-    // cumulative first reaches/exceeds `roll` always wins BEFORE the loop ever reaches a trailing
-    // 0-weight entry (adding 0 can't move the cumulative past what the previous real entry already
-    // covered). Moving a 0-weight entry to any position OTHER than last, or adding a 6th type after
-    // it, would break this guarantee and make that entry reachable again by whatever weight follows
-    // it in iteration order.
+    // Treasure Rebalance (LOCKED, THIS SESSION): Treasure's prior 15% (~14.2/map at n=500) was a
+    // real, confirmed balance gap, not a perception issue -- Artifacts are hard-capped at 3
+    // held/Delve with no swap mechanic, so the large majority of Treasure nodes at that volume were
+    // structurally guaranteed no-ops (already-at-cap, or a wasted duplicate roll). Confirmed against
+    // STS's own Treasure Room rate for comparison: STS guarantees only ~1 per 17-floor act (roughly
+    // 3-5 relics across a full 3-act run). Treasure cut 15->7 (roughly half); the freed 8 points
+    // redistributed as Combat 34->37 (+3), Elite 15->16 (+1), Resource 15->16 (+1), Shop 16->18
+    // (+2), Reforge 5->6 (+1) -- not an even split, a deliberate judgment call favoring Combat/Shop
+    // (the two types that scale best with more frequent play) over a flat +1.6 each. Re-validated
+    // at n=500 seeds after this change -- see CLAUDE.md's own Map Generation section for the real
+    // measured avg/map this landed at.
+    //
+    // Array order no longer matters for reachability now that no entry is 0-weight (every entry
+    // has a nonzero span in the cumulative weighted-roll loop below, so every entry is reachable
+    // regardless of position). The old "Reforge MUST stay last" invariant documented here applied
+    // only while Reforge's weight was 0.0 -- it's stale now and has been removed rather than left
+    // to mislead a future reader. Kept Reforge last anyway, purely for readability (same order the
+    // rest of this file already reasons about it in), not because position is load-bearing anymore.
     private static readonly (MapNodeType Type, double Weight)[] TypeOdds =
     [
-        (MapNodeType.Combat, 0.36),
+        (MapNodeType.Combat, 0.37),
         (MapNodeType.Elite, 0.16),
         (MapNodeType.Resource, 0.16),
-        (MapNodeType.Treasure, 0.16),
-        (MapNodeType.Shop, 0.16),
-        (MapNodeType.Reforge, 0.00),
+        (MapNodeType.Treasure, 0.07),
+        (MapNodeType.Shop, 0.18),
+        (MapNodeType.Reforge, 0.06),
     ];
 
     // Guaranteed Elite + Early-Game Elite Exclusion (LOCKED, STS-inspired). Used in place of
     // TypeOdds for Floors 1-5 (floorIndex 0-4): Elite is omitted entirely (not a 0-weight entry --
     // there's no adjacent-zero-weight invariant to maintain here since nothing needs it to be
-    // last), its 16% split evenly 4 ways onto Combat/Resource/Treasure/Shop (+4% each: 36->40,
-    // 16->20 x3). Reforge is likewise omitted (it's 0% everywhere already, see TypeOdds' own
-    // comment) rather than duplicated here.
+    // last). Reforge is likewise omitted here -- this predates and is independent of Reforge's
+    // TypeOdds weight: Floors 1-5 simply never offer Reforge at all, structurally, same as Elite.
     //
-    // FLAGGED: Shop's own +4% share here never actually manifests on a real map. Shop is ALSO
+    // Treasure Rebalance (LOCKED, THIS SESSION -- same real gap as the Floor-6+ table's own
+    // comment, applied here too): Treasure cut 20->8. The freed 12 points redistributed as Combat
+    // 40->45 (+5) and Resource 20->30 (+10) -- Shop deliberately did NOT get a share this time
+    // (20->17, actually -3) since its own weight here never manifests on a real map anyway (see
+    // FLAGGED note below) and there's no reason to keep inflating a structurally-inert number;
+    // the -3 was folded into Resource's own +10 instead of sitting unused on Shop. Re-validated at
+    // n=500 seeds -- see CLAUDE.md's own Map Generation section for the real measured Floors-1-5
+    // distribution this landed at.
+    //
+    // FLAGGED: Shop's own share here never actually manifests on a real map. Shop is ALSO
     // independently banned on Floors 1-5 by the pre-existing EliteShopMinFloorIndex check below (a
     // joint Elite+Shop floor gate from an earlier session, unrelated to and untouched by this
     // one) -- so `excluded` still filters Shop out of `allowed` regardless of its weight here. The
@@ -55,10 +72,10 @@ public static class MapGenerator
     // and because it costs nothing to be technically correct even where it's practically moot.
     private static readonly (MapNodeType Type, double Weight)[] EarlyFloorTypeOdds =
     [
-        (MapNodeType.Combat, 0.40),
-        (MapNodeType.Resource, 0.20),
-        (MapNodeType.Treasure, 0.20),
-        (MapNodeType.Shop, 0.20),
+        (MapNodeType.Combat, 0.45),
+        (MapNodeType.Resource, 0.30),
+        (MapNodeType.Treasure, 0.08),
+        (MapNodeType.Shop, 0.17),
     ];
 
     // Elite, Shop, and Reforge can't be directly connected to a *different* member of this group

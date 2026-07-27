@@ -74,7 +74,7 @@ Console.WriteLine($"  [{(mapBatchNoEarlyElitePass ? "PASS" : "FAIL")}] Elite nev
 var mapBatchGuaranteedElitePass = mapBatchMapsWithNoElite == 0;
 Console.WriteLine($"  [{(mapBatchGuaranteedElitePass ? "PASS" : "FAIL")}] Every one of {MapBatchCount} maps has at least 1 Elite ({mapBatchMapsWithNoElite} maps with zero)");
 
-Console.WriteLine($"  Real per-map averages at the final odds (Combat36/Elite16/Resource16/Treasure16/Shop16/Reforge0 on Floors 6+; Combat40/Resource20/Treasure20/Shop20 on Floors 1-5, Elite excluded; +1 guaranteed Elite on Floors 6-14), n={MapBatchCount} maps:");
+Console.WriteLine($"  Real per-map averages at the final odds (Combat37/Elite16/Resource16/Treasure7/Shop18/Reforge6 on Floors 6+; Combat45/Resource30/Treasure8/Shop17 on Floors 1-5, Elite excluded; +1 guaranteed Elite on Floors 6-14), n={MapBatchCount} maps:");
 foreach (MapNodeType type in Enum.GetValues<MapNodeType>())
 {
     var mapBatchAvg = (double)mapBatchTypeCounts[type] / MapBatchCount;
