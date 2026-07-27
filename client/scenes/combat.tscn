@@ -1,0 +1,245 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/combat.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/icon_glyph.gd" id="2"]
+
+[node name="CombatScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Card" type="PanelContainer" parent="CenterContainer"]
+custom_minimum_size = Vector2(1400, 0)
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="CenterContainer/Card"]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 18
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 18
+
+[node name="Content" type="VBoxContainer" parent="CenterContainer/Card/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="StatusLabel" type="Label" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
+text = ""
+
+[node name="HudRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="RoundLabel" type="Label" parent="CenterContainer/Card/Margin/Content/HudRow"]
+layout_mode = 2
+text = "Round 1 -- Combat"
+
+[node name="HudSpacer" type="Control" parent="CenterContainer/Card/Margin/Content/HudRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="WispIcon" type="Control" parent="CenterContainer/Card/Margin/Content/HudRow"]
+custom_minimum_size = Vector2(16, 16)
+layout_mode = 2
+script = ExtResource("2")
+icon_kind = "sparkle"
+icon_size = 16.0
+
+[node name="WispLabel" type="Label" parent="CenterContainer/Card/Margin/Content/HudRow"]
+layout_mode = 2
+text = "0"
+
+[node name="ArtifactsRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content/HudRow"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="HDivider1" type="HSeparator" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+
+[node name="ArenaPanel" type="PanelContainer" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+
+[node name="ArenaMargin" type="MarginContainer" parent="CenterContainer/Card/Margin/Content/ArenaPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="ArenaRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content/ArenaPanel/ArenaMargin"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 16
+
+[node name="PlayerColumn" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content/ArenaPanel/ArenaMargin/ArenaRow"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="CenterGap" type="Control" parent="CenterContainer/Card/Margin/Content/ArenaPanel/ArenaMargin/ArenaRow"]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+
+[node name="EnemyColumn" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content/ArenaPanel/ArenaMargin/ArenaRow"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="ArenaVignette" type="TextureRect" parent="CenterContainer/Card/Margin/Content/ArenaPanel"]
+visible = false
+layout_mode = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="HDivider2" type="HSeparator" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+
+[node name="MessageBar" type="PanelContainer" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+
+[node name="MessageMargin" type="MarginContainer" parent="CenterContainer/Card/Margin/Content/MessageBar"]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 6
+
+[node name="MessageRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content/MessageBar/MessageMargin"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="MessageIcon" type="Control" parent="CenterContainer/Card/Margin/Content/MessageBar/MessageMargin/MessageRow"]
+visible = false
+custom_minimum_size = Vector2(14, 14)
+layout_mode = 2
+script = ExtResource("2")
+icon_kind = "bolt"
+icon_size = 14.0
+
+[node name="MessageLabel" type="Label" parent="CenterContainer/Card/Margin/Content/MessageBar/MessageMargin/MessageRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+autowrap_mode = 3
+text = ""
+
+[node name="HDivider3" type="HSeparator" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+
+[node name="LowerRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="TurnQueuePanel" type="PanelContainer" parent="CenterContainer/Card/Margin/Content/LowerRow"]
+custom_minimum_size = Vector2(210, 0)
+layout_mode = 2
+
+[node name="TurnQueueMargin" type="MarginContainer" parent="CenterContainer/Card/Margin/Content/LowerRow/TurnQueuePanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 10
+
+[node name="TurnQueueContent" type="VBoxContainer" parent="CenterContainer/Card/Margin/Content/LowerRow/TurnQueuePanel/TurnQueueMargin"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="TurnQueueHeaderLabel" type="Label" parent="CenterContainer/Card/Margin/Content/LowerRow/TurnQueuePanel/TurnQueueMargin/TurnQueueContent"]
+layout_mode = 2
+text = "Turn Order"
+
+[node name="TurnQueueList" type="VBoxContainer" parent="CenterContainer/Card/Margin/Content/LowerRow/TurnQueuePanel/TurnQueueMargin/TurnQueueContent"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="RightColumn" type="VBoxContainer" parent="CenterContainer/Card/Margin/Content/LowerRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
+
+[node name="StatusRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content/LowerRow/RightColumn"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="EnergyLabel" type="Label" parent="CenterContainer/Card/Margin/Content/LowerRow/RightColumn/StatusRow"]
+layout_mode = 2
+text = "Energy"
+
+[node name="EnergyPipsRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content/LowerRow/RightColumn/StatusRow"]
+layout_mode = 2
+theme_override_constants/separation = 3
+
+[node name="DeckDiscardLabel" type="Label" parent="CenterContainer/Card/Margin/Content/LowerRow/RightColumn/StatusRow"]
+layout_mode = 2
+text = "Deck 0 / Discard 0"
+
+[node name="StatusRowSpacer" type="Control" parent="CenterContainer/Card/Margin/Content/LowerRow/RightColumn/StatusRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="PassButton" type="Button" parent="CenterContainer/Card/Margin/Content/LowerRow/RightColumn/StatusRow"]
+layout_mode = 2
+focus_mode = 0
+disabled = true
+text = "Pass"
+
+[node name="HandRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content/LowerRow/RightColumn"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="HDivider4" type="HSeparator" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+
+[node name="CombatLogPanel" type="PanelContainer" parent="CenterContainer/Card/Margin/Content"]
+custom_minimum_size = Vector2(0, 130)
+layout_mode = 2
+
+[node name="CombatLogMargin" type="MarginContainer" parent="CenterContainer/Card/Margin/Content/CombatLogPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 8
+
+[node name="CombatLogScroll" type="ScrollContainer" parent="CenterContainer/Card/Margin/Content/CombatLogPanel/CombatLogMargin"]
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="CombatLogList" type="VBoxContainer" parent="CenterContainer/Card/Margin/Content/CombatLogPanel/CombatLogMargin/CombatLogScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 2
+
+[node name="FooterRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+alignment = 1
+
+[node name="DevBackButton" type="Button" parent="CenterContainer/Card/Margin/Content/FooterRow"]
+layout_mode = 2
+focus_mode = 0
+text = "Back to Map (DEV)"

@@ -1,12 +1,13 @@
 extends Control
 
 ## The real Delve map screen (replaces Hub's old "The Delve screen isn't built yet." status
-## message). Resource and Treasure node screens are now real (see resource_node.gd/treasure_node.gd);
-## Combat/Elite/Boss/Shop/Reforge still show the "not built yet" placeholder status on arrival, same
-## precedent Hub's own stub already set -- untouched this session, per that task's own scope note.
-## Since Floor 1 is always fixed to Combat (see CLAUDE.md's Map Generation section), a real Delve
-## still can't reach a Resource/Treasure node through normal play until Combat ships -- see the DEV
-## ONLY panel below for how this got tested this session anyway.
+## message). Resource, Treasure, Reforge, Shop, and (NEW, Combat Phase 1) Combat/Elite/Boss node
+## screens are now all real (see resource_node.gd/treasure_node.gd/reforge_node.gd/shop_node.gd/
+## combat.gd). Combat Phase 1 is layout + real-data rendering only -- no player interaction yet, no
+## real way to win/lose a fight, see combat.gd's own top-of-file comment for full scope.
+## The DEV ONLY panel below still exists for direct/instant testing convenience (jumping straight to
+## a specific node type rather than walking real map traversal to find one) -- see that panel's own
+## comment for how it works.
 ##
 ## NODE ENCOUNTER ARCHITECTURE: resource_node.tscn/treasure_node.tscn are instanced as CHILD panels
 ## of this scene's NodeEncounterOverlay, sharing THIS script's own _hub connection, rather than
@@ -45,12 +46,14 @@ extends Control
 ##
 ## DEV ONLY force-node panel (flagged loudly in the UI itself, not just here): calls the REAL,
 ## unmodified MoveToNode repeatedly, walking the REAL map graph (BFS over AllNodes.NextRefs) from
-## the current position to the nearest Resource/Treasure node, one real hop at a time -- it does NOT
-## bypass the server's own AvailableNodes check (MoveToNode already rejects anything not adjacent to
-## CurrentNode, confirmed by reading DelveRun.TryMoveTo; nothing server-side was changed to support
-## this). This only exists because Floor 1 is fixed Combat and no Combat screen exists yet, so normal
-## play can never click past it -- strip this panel out once Combat ships and real traversal covers
-## this testing need on its own.
+## the current position to the nearest node of the requested type, one real hop at a time -- it does
+## NOT bypass the server's own AvailableNodes check (MoveToNode already rejects anything not
+## adjacent to CurrentNode, confirmed by reading DelveRun.TryMoveTo; nothing server-side was changed
+## to support this). Still needed even now that Combat Phase 1 exists: Floor 1 is fixed Combat, but
+## Combat Phase 1 has no SubmitAction/win-condition wiring at all (see combat.gd's own top-of-file
+## comment), so normal play still can't actually WIN that fight and advance past it -- strip this
+## panel out once Combat's real interactive loop (Phase 2+) ships and normal traversal covers this
+## testing need on its own.
 
 const SERVER_WS_URL := "ws://localhost:5143/hubs/game"
 const LOGIN_SCENE := "res://scenes/login.tscn"
@@ -153,10 +156,12 @@ const ICON_GLYPH_SCRIPT := preload("res://scripts/icon_glyph.gd")
 const DELVE_MAP_NODE_SCRIPT := preload("res://scripts/delve_map_node.gd")
 const RESOURCE_NODE_SCENE := preload("res://scenes/resource_node.tscn")
 const TREASURE_NODE_SCENE := preload("res://scenes/treasure_node.tscn")
+const COMBAT_SCENE := preload("res://scenes/combat.tscn")
 
 @onready var _background: TextureRect = $Background
 @onready var _dev_force_resource_button: Button = $Margin/Content/DevPanel/DevMargin/DevRow/DevForceResourceButton
 @onready var _dev_force_treasure_button: Button = $Margin/Content/DevPanel/DevMargin/DevRow/DevForceTreasureButton
+@onready var _dev_force_combat_button: Button = $Margin/Content/DevPanel/DevMargin/DevRow/DevForceCombatButton
 @onready var _node_encounter_overlay: Control = $NodeEncounterOverlay
 @onready var _content: VBoxContainer = $Margin/Content
 @onready var _status_label: Label = $Margin/Content/StatusLabel
@@ -200,6 +205,7 @@ func _ready() -> void:
 	_map_scroll.zoom_requested.connect(_on_zoom_requested)
 	_dev_force_resource_button.pressed.connect(_on_dev_force_node.bind("Resource"))
 	_dev_force_treasure_button.pressed.connect(_on_dev_force_node.bind("Treasure"))
+	_dev_force_combat_button.pressed.connect(_on_dev_force_node.bind("Combat"))
 
 	if not AuthState.is_authenticated():
 		_set_status("No active session -- returning to Login.", true)
@@ -427,10 +433,10 @@ func _on_cancel_pressed() -> void:
 	_update_map_confirm_bar()
 
 
-# Resource/Treasure now open their real screens (as child panels -- see this file's own top-of-file
-# comment for why). Combat/Elite/Boss/Shop/Reforge still fall through to the "not built yet"
-# placeholder, UNCHANGED from before -- those screens don't exist yet and this task's scope note
-# explicitly leaves them alone.
+# Resource/Treasure/Reforge/Shop/Combat/Elite/Boss all now open their real screens (as child
+# panels -- see this file's own top-of-file comment for why). Combat/Elite/Boss share the same
+# combat.tscn -- see _open_combat_encounter's own comment for why that one needs a second start()
+# argument the other four don't.
 func _handle_node_arrival(status: Dictionary) -> void:
 	var current: Variant = status.get("currentNode")
 	if not (current is Dictionary): return
@@ -438,8 +444,8 @@ func _handle_node_arrival(status: Dictionary) -> void:
 	match type_name:
 		"Resource": _open_node_encounter(RESOURCE_NODE_SCENE)
 		"Treasure": _open_node_encounter(TREASURE_NODE_SCENE)
+		"Combat", "Elite", "Boss": _open_combat_encounter(type_name)
 		_: _set_status("%s node -- not built yet." % type_name, false)
-
 
 # ---- Resource/Treasure node encounters (child panels, share this scene's own _hub) ----
 
@@ -461,6 +467,37 @@ func _on_node_encounter_resolved(instance: Control) -> void:
 	_node_encounter_overlay.visible = false
 	instance.queue_free()
 	await _refresh_after_node_resolution()
+
+
+# ---- Combat/Elite/Boss encounters (Phase 1: layout + real-data rendering only, see combat.gd's
+# own top-of-file comment for full scope) ----
+
+# combat.gd's start() takes a second argument (node_type) the other four node screens' start(hub)
+# doesn't need -- CombatStatus carries no node-type field at all (confirmed by reading
+# GameHubModels.cs), so the Combat/Elite/Boss background-palette tier can only come from what THIS
+# script already knows about the node it's routing through, same as this match statement itself
+# already relies on to dispatch here in the first place.
+func _open_combat_encounter(node_type: String) -> void:
+	for child in _node_encounter_overlay.get_children():
+		child.free()
+
+	var instance := COMBAT_SCENE.instantiate() as Control
+	_node_encounter_overlay.add_child(instance)
+	_node_encounter_overlay.visible = true
+	instance.connect("resolved", _on_combat_encounter_closed.bind(instance))
+	instance.call("start", _hub, node_type)
+
+
+# Deliberately does NOT call _refresh_after_node_resolution() -- Phase 1 has no way to actually WIN
+# or LOSE a fight yet (no SubmitAction calls at all), so closing this panel (via combat.gd's own
+# DEV-only "Back to Map" button -- see its top-of-file comment) never actually resolves the node;
+# nothing about the map/Artifacts/Wisp changed, so there is nothing real to refresh. The node stays
+# uncleared and ActiveCombat stays alive server-side (GetCombatState's resume support covers
+# reconnecting into it), exactly like standing on any other unresolved node.
+func _on_combat_encounter_closed(instance: Control) -> void:
+	_node_encounter_overlay.visible = false
+	instance.queue_free()
+
 
 
 # CollectResourceNode/ClaimTreasureNode return their own reward-shaped result, not a DelveStatus --
@@ -1034,7 +1071,7 @@ func _style_dev_panel() -> void:
 	dev_label.add_theme_color_override("font_color", Color(COLOR_DEV))
 	dev_label.add_theme_font_size_override("font_size", 11)
 
-	for button: Button in [_dev_force_resource_button, _dev_force_treasure_button]:
+	for button: Button in [_dev_force_resource_button, _dev_force_treasure_button, _dev_force_combat_button]:
 		button.add_theme_color_override("font_color", Color(COLOR_DEV))
 		button.add_theme_color_override("font_color_hover", Color(COLOR_DEV))
 		button.add_theme_color_override("font_color_pressed", Color(COLOR_DEV))

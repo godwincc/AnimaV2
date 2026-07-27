@@ -75,7 +75,7 @@ theme_override_constants/separation = 10
 
 [node name="DevLabel" type="Label" parent="Margin/Content/DevPanel/DevMargin/DevRow"]
 layout_mode = 2
-text = "DEV ONLY -- remove once Combat ships:"
+text = "DEV ONLY -- remove once Combat's real interactive loop ships:"
 
 [node name="DevForceResourceButton" type="Button" parent="Margin/Content/DevPanel/DevMargin/DevRow"]
 layout_mode = 2
@@ -86,6 +86,11 @@ text = "Force Resource Node"
 layout_mode = 2
 focus_mode = 0
 text = "Force Treasure Node"
+
+[node name="DevForceCombatButton" type="Button" parent="Margin/Content/DevPanel/DevMargin/DevRow"]
+layout_mode = 2
+focus_mode = 0
+text = "Force Combat Node"
 
 [node name="MapBox" type="PanelContainer" parent="Margin/Content"]
 custom_minimum_size = Vector2(0, 250)
