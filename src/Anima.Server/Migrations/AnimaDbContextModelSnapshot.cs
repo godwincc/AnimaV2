@@ -221,6 +221,38 @@ namespace Anima.Server.Migrations
                     b.ToTable("PendingPurchasedEmbers");
                 });
 
+            modelBuilder.Entity("Anima.Server.Data.Entities.PendingStarterRevealEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ConfirmedAnimaIdsJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("NextUnnamedIndex")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RollsJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId")
+                        .IsUnique();
+
+                    b.ToTable("PendingStarterReveals");
+                });
+
             modelBuilder.Entity("Anima.Server.Data.Entities.PendingWeaveEntity", b =>
                 {
                     b.Property<Guid>("Id")

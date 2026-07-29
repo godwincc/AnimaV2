@@ -1,6 +1,7 @@
 using Anima.Core.Combat;
 using Anima.Core.Economy;
 using Anima.Core.Enums;
+using Anima.Core.Map;
 using Anima.Core.Models;
 using Anima.Core.Run;
 
@@ -46,6 +47,14 @@ public sealed class PlayerSession
     // one-per-Boss-clear loss. Reloaded by PlayerSessionRegistry.CreateAsync on every (re)connect.
     public PendingBossHatch? PendingBossHatch { get; set; }
 
+    // DB-backed (see PendingStarterRevealEntity/PendingStarterRevealRepository) -- same treatment
+    // as PendingWeave/PendingBossHatch above: a fresh account's 3 rolled starter Anima are already
+    // committed-in-substance the moment AuthService.RegisterAsync rolls them, so losing them to a
+    // disconnect before ConfirmStarterAnima names all 3 would leave a brand-new account permanently
+    // stuck with zero playable Anima. Reloaded by PlayerSessionRegistry.CreateAsync on every
+    // (re)connect -- null once all 3 slots are named.
+    public PendingStarterReveal? PendingStarterReveal { get; set; }
+
     // Deliberately in-memory only, tied to this session/connection -- NOT the same fix as
     // PendingWeave above, and ONLY for FREE (node-dropped) Ember -- a purchased one is a real,
     // paid-for pending outcome and gets PendingPurchasedEmberEntity's DB-backed treatment instead
@@ -62,6 +71,16 @@ public sealed class PlayerSession
     // Deliberately in-memory only, tied to this session/connection -- see ShopVisitState's own
     // comment for why losing this to a disconnect is cosmetic, not a currency loss.
     public ShopVisitState? CurrentShopStock { get; set; }
+
+    // Reforge's own idempotent-first-visit marker (NEW, this session's map-odds reintroduction) --
+    // mirrors CurrentShopStock's "fire ArtifactService.OnNodeVisited exactly once per visit"
+    // shape, just with no stock to roll/cache: the browse-and-pick flow is multiple hub calls
+    // (color -> skill -> target -> Accept/Decline), so this tracks whether OnNodeVisited already
+    // fired for the CURRENT Reforge node (reference-compared), not whether any particular action
+    // has happened yet. No explicit reset needed -- moving to a different node (Reforge or not)
+    // means this reference simply stops matching run.CurrentNode, so the check fails open
+    // correctly on its own.
+    public MapNode? ReforgeVisitedNode { get; set; }
 
     // Deliberately in-memory only, tied to this session/connection -- explicit scope decision (see
     // CLAUDE.md's new-scope note: "no resume, no save/load of in-progress run state"). Discarded

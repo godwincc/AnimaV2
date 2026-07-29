@@ -148,63 +148,89 @@ const FLOOR_SPACING_X := 90.0
 const COLUMN_SPACING_Y := 70.0
 const MAP_MARGIN := 40.0
 const NODE_VIEW_SIZE := 52.0
+const NODE_ICON_SIZE := 16.0
 
+# ZOOM_MAX raised from 2.0 (live-testing feedback): even at the old max, a 15-floor+Boss map's real
+# base width (~1456px) only reached ~2330px -- comfortably fitting the ~2270px-wide map viewport at
+# 2560x1440 with zero scrolling ever needed, the exact "whole run visible at once" problem this
+# whole change exists to fix. 3.0 gives enough headroom for the new default below to actually
+# require scrolling to see the rest of the run.
 const ZOOM_MIN := 0.5
-const ZOOM_MAX := 2.0
+const ZOOM_MAX := 3.0
+
+# Legend (NEW, live-testing feedback -- large unused area to the right of the map at wide
+# resolutions). Fixed badge size, deliberately smaller than NODE_VIEW_SIZE -- DelveMapNode's own
+# radii are stored as ratios of view_size, so a smaller badge keeps the exact same shape proportions
+# as the real map nodes, not a separately-tuned copy.
+const LEGEND_ORDER := ["Combat", "Elite", "Resource", "Treasure", "Shop", "Reforge", "Boss"]
+const LEGEND_BADGE_SIZE := 26.0
 
 const ICON_GLYPH_SCRIPT := preload("res://scripts/icon_glyph.gd")
 const DELVE_MAP_NODE_SCRIPT := preload("res://scripts/delve_map_node.gd")
 const RESOURCE_NODE_SCENE := preload("res://scenes/resource_node.tscn")
 const TREASURE_NODE_SCENE := preload("res://scenes/treasure_node.tscn")
+const REFORGE_NODE_SCENE := preload("res://scenes/reforge_node.tscn")
+const SHOP_NODE_SCENE := preload("res://scenes/shop_node.tscn")
 const COMBAT_SCENE := preload("res://scenes/combat.tscn")
+const MATCH_RESULT_SCENE := preload("res://scenes/match_result.tscn")
 
 @onready var _background: TextureRect = $Background
 @onready var _dev_force_resource_button: Button = $Margin/Content/DevPanel/DevMargin/DevRow/DevForceResourceButton
 @onready var _dev_force_treasure_button: Button = $Margin/Content/DevPanel/DevMargin/DevRow/DevForceTreasureButton
+@onready var _dev_force_reforge_button: Button = $Margin/Content/DevPanel/DevMargin/DevRow/DevForceReforgeButton
+@onready var _dev_force_shop_button: Button = $Margin/Content/DevPanel/DevMargin/DevRow/DevForceShopButton
 @onready var _dev_force_combat_button: Button = $Margin/Content/DevPanel/DevMargin/DevRow/DevForceCombatButton
 @onready var _node_encounter_overlay: Control = $NodeEncounterOverlay
-@onready var _content: VBoxContainer = $Margin/Content
 @onready var _status_label: Label = $Margin/Content/StatusLabel
 @onready var _title_label: Label = $Margin/Content/HeaderRow/TitleLabel
 @onready var _retreat_button: Button = $Margin/Content/HeaderRow/RetreatButton
-@onready var _map_scroll: DelveMapScroll = $Margin/Content/MapBox/MapBoxMargin/MapScroll
-@onready var _map_canvas: DelveMapCanvas = $Margin/Content/MapBox/MapBoxMargin/MapScroll/MapCanvas
-@onready var _team_list: VBoxContainer = $Margin/Content/BottomRow/TeamPanel/TeamList
-@onready var _resource_list: VBoxContainer = $Margin/Content/BottomRow/Sidebar/ResourceList
-@onready var _artifact_list: VBoxContainer = $Margin/Content/BottomRow/Sidebar/ArtifactList
-@onready var _map_confirm_label: Label = $Margin/Content/MapConfirmBar/MapConfirmMargin/MapConfirmRow/MapConfirmLabel
-@onready var _enter_node_button: Button = $Margin/Content/MapConfirmBar/MapConfirmMargin/MapConfirmRow/EnterNodeButton
-@onready var _cancel_button: Button = $Margin/Content/MapConfirmBar/MapConfirmMargin/MapConfirmRow/CancelButton
+@onready var _map_scroll: DelveMapScroll = $Margin/Content/MapSection/MapRow/MapBox/MapBoxMargin/MapScroll
+# MapCanvasWrapper (NEW -- real zoom bugfix, see _apply_zoom's own comment) sits between MapScroll
+# and MapCanvas specifically so ScrollContainer's own child-layout pass (which resets a DIRECT
+# child's `scale` back to 1.0 every time it re-lays-out, confirmed via a real runtime diagnostic
+# print, not assumed) has something harmless to reset -- MapCanvas itself, one level deeper and
+# therefore NOT Container-managed, keeps its `scale` untouched.
+@onready var _map_canvas_wrapper: Control = $Margin/Content/MapSection/MapRow/MapBox/MapBoxMargin/MapScroll/MapCanvasWrapper
+@onready var _map_canvas: DelveMapCanvas = $Margin/Content/MapSection/MapRow/MapBox/MapBoxMargin/MapScroll/MapCanvasWrapper/MapCanvas
+@onready var _legend_list: VBoxContainer = $Margin/Content/MapSection/MapRow/LegendPanel/LegendMargin/LegendContent/LegendList
+@onready var _team_list: HBoxContainer = $Margin/Content/BottomRowCenter/BottomRow/TeamPanel/TeamList
+@onready var _resource_list: VBoxContainer = $Margin/Content/BottomRowCenter/BottomRow/Sidebar/ResourceList
+@onready var _artifact_list: VBoxContainer = $Margin/Content/BottomRowCenter/BottomRow/Sidebar/ArtifactList
+@onready var _map_confirm_label: Label = $Margin/Content/MapSection/MapConfirmBar/MapConfirmMargin/MapConfirmLabel
 @onready var _info_label: Label = $Margin/Content/InfoBar/InfoMargin/InfoLabel
 @onready var _retreat_overlay: Control = $RetreatOverlay
 @onready var _retreat_confirm_button: Button = $RetreatOverlay/CenterContainer/ModalPanel/ModalMargin/ModalContent/ModalButtonRow/RetreatConfirmButton
 @onready var _retreat_cancel_button: Button = $RetreatOverlay/CenterContainer/ModalPanel/ModalMargin/ModalContent/ModalButtonRow/RetreatCancelButton
-@onready var _end_summary_panel: CenterContainer = $EndSummaryPanel
-@onready var _end_summary_header: Label = $EndSummaryPanel/EndSummaryCard/EndSummaryMargin/EndSummaryContent/EndSummaryHeaderLabel
-@onready var _end_summary_text: Label = $EndSummaryPanel/EndSummaryCard/EndSummaryMargin/EndSummaryContent/EndSummaryTextLabel
-@onready var _return_to_hub_button: Button = $EndSummaryPanel/EndSummaryCard/EndSummaryMargin/EndSummaryContent/ReturnToHubButton
 
 var _hub: HubConnection
 var _roster: Array = []
 var _current_status: Dictionary = {}
 var _selected_node: Variant = null # Dictionary (a NodeRef-shaped entry from AvailableNodes) or null
 var _hovered_info_text: String = ""
-var _zoom: float = 1.0
+# Default zoom (NEW, live-testing feedback): at 1.0 the whole 15-floor map rendered flat in one
+# viewport, no scrolling ever needed -- the main driver of the "too dense/complicated" read from
+# earlier testing. Starting zoomed in shows a comfortably readable subset of floors instead,
+# requiring horizontal scroll/drag to see the rest. Tuned against a real 2560x1440 Web-build
+# session, not guessed -- 1.6 still fit the ENTIRE run (Boss included) with zero scrolling, since a
+# real map's own base width (~1456px) still undercut the ~2270px-wide map viewport at that zoom;
+# 2.2 was confirmed (same real session) to require real horizontal scrolling to reach Boss.
+var _zoom: float = 1.6
 var _map_canvas_base_size: Vector2 = Vector2(800, 300)
 var _node_views: Dictionary = {} # "floorIndex,column" -> Dictionary{view, data, pos}
 
 
 func _ready() -> void:
 	_apply_theme()
+	_build_legend()
 	_retreat_button.pressed.connect(_on_retreat_pressed)
 	_retreat_confirm_button.pressed.connect(_on_retreat_confirm_pressed)
 	_retreat_cancel_button.pressed.connect(_on_retreat_cancel_pressed)
-	_enter_node_button.pressed.connect(_on_enter_node_pressed)
-	_cancel_button.pressed.connect(_on_cancel_pressed)
-	_return_to_hub_button.pressed.connect(func(): get_tree().change_scene_to_file(HUB_SCENE))
 	_map_scroll.zoom_requested.connect(_on_zoom_requested)
+	_map_canvas.background_pressed.connect(_on_map_background_pressed)
 	_dev_force_resource_button.pressed.connect(_on_dev_force_node.bind("Resource"))
 	_dev_force_treasure_button.pressed.connect(_on_dev_force_node.bind("Treasure"))
+	_dev_force_reforge_button.pressed.connect(_on_dev_force_node.bind("Reforge"))
+	_dev_force_shop_button.pressed.connect(_on_dev_force_node.bind("Shop"))
 	_dev_force_combat_button.pressed.connect(_on_dev_force_node.bind("Combat"))
 
 	if not AuthState.is_authenticated():
@@ -243,6 +269,7 @@ func _run() -> void:
 
 	_current_status = status
 	_set_status("", false)
+	_retreat_button.visible = true # PHASE 5: standing on the map from this point on
 
 	var ledger: Variant = await _hub.invoke("GetLedger", [])
 	_render_map()
@@ -280,6 +307,19 @@ func _render_map() -> void:
 			available_keys[_node_key(n)] = true
 	var selected_key := _node_key(_selected_node) if _selected_node is Dictionary else ""
 
+	# Path-taken tracking (NEW): a node is "on the path" if it's Cleared (real, server-tracked --
+	# DelveMapNode.Cleared, mirrors DelveRun.ClearedNodes) or is CurrentNode itself. DelveRun's
+	# ClearedNodes is an unordered HashSet server-side -- no ordered traversal history exists on the
+	# wire -- but since TryMoveTo only ever advances to one of CurrentNode's own Next edges (a linear
+	# walk through the DAG, never branching/backtracking), an edge between two cleared-or-current nodes
+	# IS necessarily a real walked edge: only one of a cleared node's NextRefs can lead to another
+	# cleared-or-current node (the one actually chosen), every other branch was never taken and so
+	# never got marked cleared. Derived entirely client-side from data already on the wire.
+	var cleared_or_current_keys: Dictionary = {}
+	for n: Variant in all_nodes:
+		if n is Dictionary and (bool(n.get("cleared", false)) or _node_key(n) == current_key):
+			cleared_or_current_keys[_node_key(n)] = true
+
 	var max_x := 0.0
 	var max_y := 0.0
 
@@ -297,6 +337,8 @@ func _render_map() -> void:
 			state = "current"
 		elif available_keys.has(key):
 			state = "selected" if key == selected_key else "reachable"
+		elif bool(n.get("cleared", false)):
+			state = "cleared"
 
 		var view := _build_node_view(n, state)
 		view.position = pos - Vector2(NODE_VIEW_SIZE, NODE_VIEW_SIZE) * 0.5
@@ -311,11 +353,17 @@ func _render_map() -> void:
 		var entry: Dictionary = _node_views[key]
 		var node_data: Dictionary = entry["data"]
 		var from_pos: Vector2 = entry["pos"]
+		var from_on_path: bool = cleared_or_current_keys.has(key)
 		for next_ref: Variant in node_data.get("nextRefs", []):
 			if next_ref is Dictionary:
 				var next_key := _node_key(next_ref)
 				if _node_views.has(next_key):
-					segments.append([from_pos, _node_views[next_key]["pos"]])
+					var to_on_path: bool = cleared_or_current_keys.has(next_key)
+					segments.append({
+						"from": from_pos,
+						"to": _node_views[next_key]["pos"],
+						"is_path": from_on_path and to_on_path,
+					})
 	_map_canvas.set_segments(segments)
 
 
@@ -338,18 +386,84 @@ func _build_node_view(node_data: Dictionary, state: String) -> Control:
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	icon.set_script(ICON_GLYPH_SCRIPT)
 	icon.set("icon_kind", NODE_ICONS.get(type_name, "sword"))
-	# Dark icon on the "current" node's gold fill for contrast; cream everywhere else (dimming for
-	# the "dim" state comes from the whole view's modulate.a, not a separate icon color).
-	icon.set("icon_color", Color(COLOR_GRADIENT_BOTTOM) if state == "current" else Color(COLOR_TEXT_CREAM))
-	icon.set("icon_size", 16.0)
-	icon.position = Vector2(NODE_VIEW_SIZE, NODE_VIEW_SIZE) * 0.5 - Vector2(8, 8)
+	# Dark icon on the "current" node's gold fill for contrast; per-type contrast (DelveMapNode's own
+	# ICON_COLORS, the same source its Legend badges read from) everywhere else -- solid per-type
+	# fills mean a single fixed icon color no longer reads legibly against all of them. "dim" nodes
+	# darken the icon the same way DelveMapNode darkens its own fill/stroke (dim_color, shared so the
+	# two don't drift) -- the icon is a sibling Control this script builds, not drawn by DelveMapNode
+	# itself, so it needs the darkening applied here rather than relying on modulate (which no longer
+	# dims anything, see DelveMapNode's own comment on why).
+	var icon_color := Color(COLOR_GRADIENT_BOTTOM) if state == "current" else Color(DelveMapNode.ICON_COLORS.get(type_name, "f0e4d4"))
+	if state == "dim":
+		icon_color = DelveMapNode.dim_color(icon_color)
+	elif state == "cleared":
+		icon_color = DelveMapNode.cleared_color(icon_color)
+	icon.set("icon_color", icon_color)
+	icon.set("icon_size", NODE_ICON_SIZE)
+	# Centered via a computed offset (half the real icon size), not a hardcoded magic number -- stays
+	# correct if NODE_ICON_SIZE ever changes, rather than silently drifting off-center.
+	icon.position = Vector2(NODE_VIEW_SIZE, NODE_VIEW_SIZE) * 0.5 - Vector2.ONE * (NODE_ICON_SIZE * 0.5)
 	view.add_child(icon)
 
 	return view
 
 
-func _on_map_node_pressed(node_data: Dictionary) -> void:
-	_selected_node = node_data
+# ---- Legend (static content, built once -- doesn't depend on server data) ----
+
+func _build_legend() -> void:
+	for child in _legend_list.get_children():
+		child.free()
+	for type_name: String in LEGEND_ORDER:
+		_legend_list.add_child(_build_legend_row(type_name))
+
+
+func _build_legend_row(type_name: String) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+
+	# Reuses the real DelveMapNode script at a smaller view_size, "legend" visual_state -- same
+	# shape/fill/icon-color source of truth as the actual map, never dims and never responds to
+	# hover/click (this is a static legend entry, not a real node).
+	var badge := Control.new()
+	badge.set_script(DELVE_MAP_NODE_SCRIPT)
+	badge.set("view_size", LEGEND_BADGE_SIZE)
+	badge.set("node_type", type_name)
+	badge.set("visual_state", "legend")
+	row.add_child(badge)
+
+	var badge_icon := Control.new()
+	badge_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge_icon.set_script(ICON_GLYPH_SCRIPT)
+	badge_icon.set("icon_kind", NODE_ICONS.get(type_name, "sword"))
+	var badge_icon_size := LEGEND_BADGE_SIZE * (NODE_ICON_SIZE / NODE_VIEW_SIZE) # same proportion as the real map nodes
+	badge_icon.set("icon_size", badge_icon_size)
+	badge_icon.set("icon_color", Color(DelveMapNode.ICON_COLORS.get(type_name, "f0e4d4")))
+	badge_icon.position = Vector2.ONE * (LEGEND_BADGE_SIZE * 0.5) - Vector2.ONE * (badge_icon_size * 0.5)
+	badge.add_child(badge_icon)
+
+	var label := Label.new()
+	label.text = type_name
+	label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM_DIM))
+	label.add_theme_font_size_override("font_size", UiTheme.SIZE_BODY)
+	row.add_child(label)
+
+	return row
+
+
+## Single click: toggle-select (matches the same node clicked again, or any other reachable node,
+## replaces selection) / deselect. Double click (event.double_click, see DelveMapNode._gui_input):
+## enters the node directly, same as the old Enter Node button used to. REPLACES the old
+## select-then-confirm-bar-button flow (live-testing feedback: dragging the cursor all the way to a
+## full-width docked bar's buttons after selecting a node was a real, confirmed usability problem).
+func _on_map_node_pressed(is_double_click: bool, node_data: Dictionary) -> void:
+	if is_double_click:
+		_enter_node(node_data)
+		return
+
+	if _selected_node is Dictionary and _node_key(_selected_node) == _node_key(node_data):
+		_selected_node = null
+	else:
+		_selected_node = node_data
 	# call_deferred, not a direct call -- this handler runs INSIDE the clicked DelveMapNode's own
 	# node_pressed emission (itself inside that node's _gui_input), so the node is still "locked"
 	# on the call stack. _render_map()'s cleanup loop calls child.free() (immediate, not queue_free
@@ -363,32 +477,59 @@ func _on_map_node_pressed(node_data: Dictionary) -> void:
 	_update_map_confirm_bar()
 
 
+## Background canvas click (DelveMapCanvas.background_pressed, fires only for clicks that land on
+## genuinely empty map area, never on a node -- see that script's own comment): deselects, same as
+## clicking the already-selected node again.
+func _on_map_background_pressed() -> void:
+	if _selected_node == null:
+		return
+	_selected_node = null
+	_render_map()
+	_update_map_confirm_bar()
+
+
 func _on_zoom_requested(factor: float) -> void:
 	_zoom = clamp(_zoom * factor, ZOOM_MIN, ZOOM_MAX)
 	_apply_zoom()
 
 
+## REAL BUG FIX (live-testing feedback -- zoom silently did nothing, at any value): ScrollContainer
+## is a Container, and Containers reset a DIRECT child's `scale` back to Vector2.ONE on their own
+## internal layout pass, which runs AFTER this function returns -- confirmed via a real runtime
+## diagnostic print (canvas.scale read back as (1.0, 1.0) one deferred call later, despite being set
+## to the real zoom value here), not assumed. This was true of the ORIGINAL zoom code too, before
+## this session's amendments -- the map has likely never actually zoomed, regardless of the `_zoom`
+## value, since the very first session that built this screen.
+##
+## Fix: MapCanvas itself always stays at its natural, UNSCALED size (`_map_canvas_base_size`) and
+## only its `scale` changes -- since MapCanvas is now a GRANDCHILD of MapScroll (via
+## MapCanvasWrapper, a plain, non-Container Control), MapScroll never touches MapCanvas's own scale
+## at all. MapCanvasWrapper -- MapScroll's actual DIRECT child -- reports the ZOOMED size instead,
+## so the ScrollContainer allocates the correct scrollable range; a plain Control doesn't enforce
+## any layout on its own children the way a Container does, so MapCanvas's real scale is left alone.
 func _apply_zoom() -> void:
 	_map_canvas.scale = Vector2(_zoom, _zoom)
-	_map_canvas.custom_minimum_size = _map_canvas_base_size * _zoom
+	_map_canvas.custom_minimum_size = _map_canvas_base_size
+	_map_canvas_wrapper.custom_minimum_size = _map_canvas_base_size * _zoom
 
 
-# ---- Node selection / move confirm (its own strip, directly below the boxed map) ----
+# ---- Node selection info (its own strip, directly below the boxed map) ----
 # Independent from the skill-info strip below -- a node selection and a skill hover used to share
 # one message area and silently overwrite each other (live-testing feedback); now each has its own
 # strip and its own state, so neither can stomp the other.
+#
+# Info-only (NEW -- replaces the old Enter Node/Cancel button pair): the docked bar itself is
+# unchanged (still the same PanelContainer directly below the map, still the project's established
+# docked-message-area convention rather than a floating popup), it just no longer carries buttons --
+# double-clicking the selected node IS the "confirm," see _on_map_node_pressed.
 
 func _update_map_confirm_bar() -> void:
 	if _selected_node is Dictionary:
 		var floor_display := int(_selected_node.get("floorIndex", 0)) + 1
 		var type_name := str(_selected_node.get("type", "?"))
-		_map_confirm_label.text = "Move to the %s node on Floor %d?" % [type_name, floor_display]
-		_enter_node_button.visible = true
-		_cancel_button.visible = true
+		_map_confirm_label.text = "%s -- Floor %d selected. Double-click to enter." % [type_name, floor_display]
 	else:
 		_map_confirm_label.text = ""
-		_enter_node_button.visible = false
-		_cancel_button.visible = false
 
 
 # ---- Hover/tap info (its own strip, below the Team panel) -- shared by skill chips AND Artifact
@@ -409,15 +550,19 @@ func _clear_hovered_info() -> void:
 	_update_info_bar()
 
 
-func _on_enter_node_pressed() -> void:
-	if not (_selected_node is Dictionary): return
-
-	var request := {"floorIndex": int(_selected_node.get("floorIndex", 0)), "column": int(_selected_node.get("column", 0))}
+## Triggered by a double-click on a reachable node (see _on_map_node_pressed) -- was previously the
+## Enter Node button's press handler; renamed and parameterized on node_data directly (rather than
+## reading back through _selected_node) since a double-click's second press fires before this frame
+## necessarily has _selected_node pointing at the same node in every edge case (e.g. the player's
+## very first click of a session, before anything was ever selected).
+func _enter_node(node_data: Dictionary) -> void:
+	var request := {"floorIndex": int(node_data.get("floorIndex", 0)), "column": int(node_data.get("column", 0))}
 	var result: Variant = await _hub.invoke("MoveToNode", [request])
 	_selected_node = null
 
 	if not (result is Dictionary):
 		_set_status("Could not move to that node -- check your connection.", true)
+		_update_map_confirm_bar()
 		return
 
 	_current_status = result
@@ -425,12 +570,6 @@ func _on_enter_node_pressed() -> void:
 	_render_artifacts()
 	_update_map_confirm_bar()
 	_handle_node_arrival(result)
-
-
-func _on_cancel_pressed() -> void:
-	_selected_node = null
-	_render_map()
-	_update_map_confirm_bar()
 
 
 # Resource/Treasure/Reforge/Shop/Combat/Elite/Boss all now open their real screens (as child
@@ -444,8 +583,11 @@ func _handle_node_arrival(status: Dictionary) -> void:
 	match type_name:
 		"Resource": _open_node_encounter(RESOURCE_NODE_SCENE)
 		"Treasure": _open_node_encounter(TREASURE_NODE_SCENE)
+		"Reforge": _open_node_encounter(REFORGE_NODE_SCENE)
+		"Shop": _open_node_encounter(SHOP_NODE_SCENE)
 		"Combat", "Elite", "Boss": _open_combat_encounter(type_name)
 		_: _set_status("%s node -- not built yet." % type_name, false)
+
 
 # ---- Resource/Treasure node encounters (child panels, share this scene's own _hub) ----
 
@@ -456,6 +598,7 @@ func _open_node_encounter(scene: PackedScene) -> void:
 	var instance := scene.instantiate() as Control
 	_node_encounter_overlay.add_child(instance)
 	_node_encounter_overlay.visible = true
+	_retreat_button.visible = false # PHASE 5: Retreat is map-only, see this file's own top comment
 	# String-based connect()/call() (not instance.resolved.connect(...) / instance.start(...)) --
 	# instance's static type is plain Control (resource_node.gd/treasure_node.gd have no shared
 	# class_name to type this as), same reasoning as the map nodes' own connect() usage above.
@@ -466,11 +609,12 @@ func _open_node_encounter(scene: PackedScene) -> void:
 func _on_node_encounter_resolved(instance: Control) -> void:
 	_node_encounter_overlay.visible = false
 	instance.queue_free()
+	_retreat_button.visible = true
 	await _refresh_after_node_resolution()
 
 
-# ---- Combat/Elite/Boss encounters (Phase 1: layout + real-data rendering only, see combat.gd's
-# own top-of-file comment for full scope) ----
+# ---- Combat/Elite/Boss encounters -- Phase 5 (real win/loss, Match Result) closed the "no way to
+# actually resolve a fight" gap Phase 1 left open, see combat.gd's own top-of-file comment ----
 
 # combat.gd's start() takes a second argument (node_type) the other four node screens' start(hub)
 # doesn't need -- CombatStatus carries no node-type field at all (confirmed by reading
@@ -484,20 +628,33 @@ func _open_combat_encounter(node_type: String) -> void:
 	var instance := COMBAT_SCENE.instantiate() as Control
 	_node_encounter_overlay.add_child(instance)
 	_node_encounter_overlay.visible = true
+	_retreat_button.visible = false # PHASE 5: Retreat is map-only, see this file's own top comment
 	instance.connect("resolved", _on_combat_encounter_closed.bind(instance))
+	instance.connect("delve_ended", _on_combat_delve_ended.bind(instance))
 	instance.call("start", _hub, node_type)
 
 
-# Deliberately does NOT call _refresh_after_node_resolution() -- Phase 1 has no way to actually WIN
-# or LOSE a fight yet (no SubmitAction calls at all), so closing this panel (via combat.gd's own
-# DEV-only "Back to Map" button -- see its top-of-file comment) never actually resolves the node;
-# nothing about the map/Artifacts/Wisp changed, so there is nothing real to refresh. The node stays
-# uncleared and ActiveCombat stays alive server-side (GetCombatState's resume support covers
-# reconnecting into it), exactly like standing on any other unresolved node.
+# PHASE 5: now DOES refresh unconditionally -- a real Combat/Elite Victory (via combat.gd's own
+# Match Result "Continue") reaches here with the node already cleared and Wisp/Shards/Artifacts
+# genuinely changed server-side, so a refresh is required. The DEV-only "Back to Map" mid-fight
+# escape (see combat.gd's own top comment) ALSO reaches this same signal with nothing actually
+# changed -- refreshing then is harmless (GetDelveStatus/GetLedger just re-confirm the unchanged
+# state), so one shared close path covers both cases without needing to distinguish them.
 func _on_combat_encounter_closed(instance: Control) -> void:
 	_node_encounter_overlay.visible = false
 	instance.queue_free()
+	_retreat_button.visible = true
+	await _refresh_after_node_resolution()
 
+
+# PHASE 5: Boss Victory (once its Delve Complete summary is dismissed) or a Defeat -- the Delve
+# itself already ended server-side (Session.ActiveDelveRun cleared, per SubmitAction's own
+# comment), so there is no map state left to refresh; navigate to Hub instead, same as Retreat's
+# own Return to Hub button below.
+func _on_combat_delve_ended(instance: Control) -> void:
+	_node_encounter_overlay.visible = false
+	instance.queue_free()
+	get_tree().change_scene_to_file(HUB_SCENE)
 
 
 # CollectResourceNode/ClaimTreasureNode return their own reward-shaped result, not a DelveStatus --
@@ -515,7 +672,7 @@ func _refresh_after_node_resolution() -> void:
 	_update_map_confirm_bar()
 
 
-# ---- DEV ONLY: force-reach a Resource/Treasure node for manual testing ----
+# ---- DEV ONLY: force-reach a Resource/Treasure/Reforge node for manual testing ----
 # See this file's own top-of-file comment: this walks the REAL map graph via repeated real
 # MoveToNode calls (never a fabricated/forced server state) -- strip this panel out once Combat
 # exists and normal play can reach Floor 6+ on its own.
@@ -657,7 +814,11 @@ func _build_team_card(anima: Dictionary) -> Control:
 	# of stretching it edge-to-edge; explicit custom_minimum_size still required regardless, per
 	# hub.gd's own comment on why (a Control with real content but no minimum size collapses to
 	# invisible inside a container that doesn't infer one for it).
-	portrait_wrap.custom_minimum_size = Vector2(40, 40)
+	# 64x64 (bumped from 40x40, readability pass) -- this literal is Delve-screen-local only, NOT
+	# shared with hub.gd's own team-row portrait (Vector2(0, 90), a different flexible-width pattern)
+	# or sanctum.gd's roster-card portrait (Vector2(56, 56), its own separate literal) -- confirmed via
+	# grep before touching this, so this change can't silently resize either of those other screens.
+	portrait_wrap.custom_minimum_size = Vector2(64, 64)
 	portrait_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 
 	if ASPECT_SPRITES.has(color_name):
@@ -720,9 +881,10 @@ func _build_skill_chip(part: Dictionary) -> Control:
 	# (see _build_team_card's own comment on why that wrapping exists), a cell with zero declared
 	# minimum width gives the GridContainer nothing to size its columns from (the icon+label row
 	# inside is anchor-positioned, which doesn't feed a minimum size back up to this wrapper), so
-	# every chip collapsed to the same zero-width point and overlapped. 100px comfortably fits this
-	# roster's longest skill names ("Guiding Light", "Bloodthirst") at this font size.
-	wrapper.custom_minimum_size = Vector2(100, 16)
+	# every chip collapsed to the same zero-width point and overlapped. 128px comfortably fits this
+	# roster's longest skill names ("Guiding Light", "Bloodthirst") at UiTheme.SIZE_BODY (bumped from
+	# 100x16 alongside the font-size increase, so the wrapper doesn't clip the now-larger text).
+	wrapper.custom_minimum_size = Vector2(128, 22)
 	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	wrapper.mouse_filter = Control.MOUSE_FILTER_STOP
 	wrapper.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -739,14 +901,14 @@ func _build_skill_chip(part: Dictionary) -> Control:
 	icon.set_script(ICON_GLYPH_SCRIPT)
 	icon.set("icon_kind", icon_kind)
 	icon.set("icon_color", Color(SKILL_ICON_COLORS.get(icon_kind, "e8a03a")))
-	icon.set("icon_size", 11.0)
+	icon.set("icon_size", 14.0)
 	row.add_child(icon)
 
 	var label := Label.new()
 	label.text = str(part.get("skillName", "--"))
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.add_theme_color_override("font_color", Color(COLOR_TEXT_MUTED))
-	label.add_theme_font_size_override("font_size", 10)
+	label.add_theme_font_size_override("font_size", UiTheme.SIZE_BODY)
 	row.add_child(label)
 
 	var augments: Array = part.get("appliedAugments", [])
@@ -832,24 +994,24 @@ func _build_resource_row(key: String, count: int) -> Control:
 	row.add_theme_constant_override("separation", 6)
 
 	var icon := Control.new()
-	icon.custom_minimum_size = Vector2(13, 13)
+	icon.custom_minimum_size = Vector2(16, 16)
 	icon.set_script(ICON_GLYPH_SCRIPT)
 	icon.set("icon_kind", RESOURCE_ICONS.get(key, "sparkle"))
 	icon.set("icon_color", Color(COLOR_ACCENT_AMBER))
-	icon.set("icon_size", 13.0)
+	icon.set("icon_size", 16.0)
 	row.add_child(icon)
 
 	var label := Label.new()
 	label.text = str(RESOURCE_LABELS.get(key, key))
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.add_theme_color_override("font_color", Color(COLOR_TEXT_MUTED))
-	label.add_theme_font_size_override("font_size", 11)
+	label.add_theme_font_size_override("font_size", UiTheme.SIZE_BODY)
 	row.add_child(label)
 
 	var count_label := Label.new()
 	count_label.text = str(count)
 	count_label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM))
-	count_label.add_theme_font_size_override("font_size", 12)
+	count_label.add_theme_font_size_override("font_size", UiTheme.SIZE_LABEL)
 	row.add_child(count_label)
 
 	return row
@@ -950,7 +1112,14 @@ func _build_empty_artifact_slot() -> Control:
 	return panel
 
 
-# ---- Retreat ----
+# ---- Retreat (PHASE 5) ----
+# RetreatButton is visible only while standing on the map between nodes -- see
+# _open_node_encounter/_open_combat_encounter (hide) and _on_node_encounter_resolved/
+# _on_combat_encounter_closed/_run (show) for where visibility toggles; there is no other "mid-node"
+# state to guard against beyond those two paths (every other node type resolves atomically in one
+# call, per this file's own top-of-file comment). The confirm modal (RetreatOverlay) is unchanged
+# from the earlier pass that built it -- only what happens AFTER a real RetreatFromDelve() call
+# changed, see _on_retreat_confirm_pressed below.
 
 func _on_retreat_pressed() -> void:
 	_retreat_overlay.visible = true
@@ -960,25 +1129,35 @@ func _on_retreat_cancel_pressed() -> void:
 	_retreat_overlay.visible = false
 
 
+## Calls the real RetreatFromDelve() RPC directly (per this task's own instruction), then shows the
+## shared match_result.tscn component in "retreat" mode -- same DelveEndSummary-shaped result
+## Defeat's own summary step reuses, per CLAUDE.md's "Retreat... reuses Defeat's layout" line (see
+## match_result.gd's own top-of-file comment for the full mode/params contract).
 func _on_retreat_confirm_pressed() -> void:
 	_retreat_overlay.visible = false
 	var result: Variant = await _hub.invoke("RetreatFromDelve", [])
 	if result is Dictionary:
-		_show_end_summary(result, "Delve Retreated")
+		_open_match_result("retreat", result)
 	else:
 		_set_status("Retreat failed -- check your connection.", true)
 
 
-# Match Result screens don't exist yet either (separate future task, per this task's own scope
-# note) -- a plain inline summary + Return to Hub button stands in for the fully designed
-# Defeat/Retreat result screen from CLAUDE.md's Match Result & Retreat System section.
-func _show_end_summary(summary: Dictionary, header: String) -> void:
-	_content.visible = false
-	_end_summary_panel.visible = true
-	_end_summary_header.text = header
-	var floor_display := int(summary.get("floorIndexReached", 0)) + 1
-	_end_summary_text.text = "Wisp earned this run: %d -> kept: %d\nFloor reached: %d" % [
-		int(summary.get("wispEarnedThisRun", 0)), int(summary.get("wispKept", 0)), floor_display]
+## Shared with combat.gd's own _open_match_result (duplicated, not shared -- this codebase's
+## established per-file small-widget convention, same reasoning augment_picker.gd's own
+## EMBER_COLOR_TINTS duplication already documents). Instanced into the SAME NodeEncounterOverlay
+## every other node screen already uses -- Retreat only ever happens while standing on the map
+## (RetreatButton's own visibility gate), so NodeEncounterOverlay is guaranteed empty/hidden here.
+## Only wires `return_to_hub` -- "retreat" mode never emits `continue_to_map` (see match_result.gd).
+func _open_match_result(mode: String, params: Dictionary) -> void:
+	for child in _node_encounter_overlay.get_children():
+		child.free()
+
+	var instance := MATCH_RESULT_SCENE.instantiate() as Control
+	_node_encounter_overlay.add_child(instance)
+	_node_encounter_overlay.visible = true
+	_retreat_button.visible = false
+	instance.connect("return_to_hub", func(): get_tree().change_scene_to_file(HUB_SCENE))
+	instance.call("start", _hub, mode, params)
 
 
 # ---- Shared chrome ----
@@ -1031,13 +1210,13 @@ func _apply_theme() -> void:
 	_title_label.add_theme_font_size_override("font_size", 18)
 	_status_label.add_theme_font_size_override("font_size", 13)
 
-	for label: Label in [$Margin/Content/BottomRow/TeamPanel/TeamHeaderLabel, $Margin/Content/BottomRow/Sidebar/ResourcesHeaderLabel, $Margin/Content/BottomRow/Sidebar/ArtifactsHeaderLabel]:
+	for label: Label in [$Margin/Content/BottomRowCenter/BottomRow/TeamPanel/TeamHeaderLabel, $Margin/Content/BottomRowCenter/BottomRow/Sidebar/ResourcesHeaderLabel, $Margin/Content/BottomRowCenter/BottomRow/Sidebar/ArtifactsHeaderLabel]:
 		label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM_DIM))
 		label.add_theme_font_size_override("font_size", 13)
 
 	_style_map_box()
 
-	_style_panel($Margin/Content/MapConfirmBar)
+	_style_panel($Margin/Content/MapSection/MapConfirmBar)
 	_map_confirm_label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM_DIM))
 	_map_confirm_label.add_theme_font_size_override("font_size", 12)
 
@@ -1046,10 +1225,6 @@ func _apply_theme() -> void:
 	_info_label.add_theme_font_size_override("font_size", 12)
 
 	_style_panel($RetreatOverlay/CenterContainer/ModalPanel)
-	_style_panel($EndSummaryPanel/EndSummaryCard)
-	_end_summary_header.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM))
-	_end_summary_header.add_theme_font_size_override("font_size", 16)
-	_end_summary_text.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM_DIM))
 
 	_style_dev_panel()
 
@@ -1071,7 +1246,7 @@ func _style_dev_panel() -> void:
 	dev_label.add_theme_color_override("font_color", Color(COLOR_DEV))
 	dev_label.add_theme_font_size_override("font_size", 11)
 
-	for button: Button in [_dev_force_resource_button, _dev_force_treasure_button, _dev_force_combat_button]:
+	for button: Button in [_dev_force_resource_button, _dev_force_treasure_button, _dev_force_reforge_button, _dev_force_shop_button, _dev_force_combat_button]:
 		button.add_theme_color_override("font_color", Color(COLOR_DEV))
 		button.add_theme_color_override("font_color_hover", Color(COLOR_DEV))
 		button.add_theme_color_override("font_color_pressed", Color(COLOR_DEV))
@@ -1097,4 +1272,9 @@ func _style_map_box() -> void:
 	style.border_color = Color(Color(COLOR_CARD_BORDER), 0.25)
 	style.set_border_width_all(1)
 	style.set_corner_radius_all(10)
-	$Margin/Content/MapBox.add_theme_stylebox_override("panel", style)
+	$Margin/Content/MapSection/MapRow/MapBox.add_theme_stylebox_override("panel", style)
+
+	_style_panel($Margin/Content/MapSection/MapRow/LegendPanel)
+	var legend_header: Label = $Margin/Content/MapSection/MapRow/LegendPanel/LegendMargin/LegendContent/LegendHeaderLabel
+	legend_header.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM_DIM))
+	legend_header.add_theme_font_size_override("font_size", 13)

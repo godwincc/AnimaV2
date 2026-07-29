@@ -22,6 +22,22 @@ public class DelveHistoryRepository(AnimaDbContext db, AccountLockRegistry locks
             .ToListAsync(ct);
     }
 
+    // Backs the Hub screen's account-level "Last delve" summary bar (NEW, Hub screen session --
+    // this table only ever had a per-Anima read before this). Every team member gets their OWN row
+    // for the same Delve-end event (AppendAsync is called once per team member, same Timestamp/
+    // Outcome/FloorIndexReached/BossDefeated each time -- see its own comment), so the single most
+    // recent row across the WHOLE account, regardless of which AnimaId it's filed under, is exactly
+    // "the last Delve this account played." Null if the account has never finished a Delve yet
+    // (brand-new account, or one that's only ever quit mid-run without a Boss Victory/Defeat/
+    // Retreat resolving -- though in practice every real Delve end DOES call AppendAsync).
+    public async Task<DelveHistoryEntity?> LoadMostRecentForAccountAsync(Guid accountId, CancellationToken ct = default)
+    {
+        return await db.DelveHistories
+            .Where(h => h.AccountId == accountId)
+            .OrderByDescending(h => h.Timestamp)
+            .FirstOrDefaultAsync(ct);
+    }
+
     public async Task AppendAsync(
         Guid accountId,
         string animaId,

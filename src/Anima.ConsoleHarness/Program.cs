@@ -65,8 +65,7 @@ if (!mapBatchRulesPass)
     if (mapBatchViolations.Count > 20) Console.WriteLine($"    ... and {mapBatchViolations.Count - 20} more");
 }
 
-var mapBatchReforgeZeroPass = mapBatchTypeCounts[MapNodeType.Reforge] == 0;
-Console.WriteLine($"  [{(mapBatchReforgeZeroPass ? "PASS" : "FAIL")}] Reforge never rolls onto any of the {MapBatchCount} maps at 0% odds ({mapBatchTypeCounts[MapNodeType.Reforge]} total occurrences)");
+Console.WriteLine($"  Reforge (reintroduced at 5% odds this session) occurrences: {mapBatchTypeCounts[MapNodeType.Reforge]} total across {MapBatchCount} maps");
 
 var mapBatchNoEarlyElitePass = mapBatchEarlyEliteOccurrences == 0;
 Console.WriteLine($"  [{(mapBatchNoEarlyElitePass ? "PASS" : "FAIL")}] Elite never rolls on Floors 1-5 across {MapBatchCount} maps ({mapBatchEarlyEliteOccurrences} occurrences)");
@@ -450,56 +449,83 @@ var shardInsufficientPass = !shardInsufficientResult.Success
     && shardParentA.WeaveCount == shardCountBeforeSecondAttempt; // nothing rolled
 Console.WriteLine($"  [{(shardInsufficientPass ? "PASS" : "FAIL")}] Requesting Echo Shard spend with 0 remaining is rejected (reason: {shardInsufficientResult.RejectionReason})");
 
-// ---- Reforge (REDESIGNED, no more random roll): browse list excludes the target's current skill,
-// same-color pick costs 40, cross-color pick costs 80 ----
+// ---- Reforge (REORDERED THIS SESSION: color-first, not Part-first -- see ReforgeService's own
+// comment). GetBrowseOptionsByColor is now UNFILTERED (no target-owned-skill exclusion -- the
+// target isn't picked until the NEXT step), Crest is still structurally excluded (ReforgePartPool
+// never includes it), and same-color/cross-color Accept costs are unchanged. ----
 var reforgeMap = MapGenerator.Generate(new Random(99));
 var reforgeTarget = SampleAnimas.CreateEmber(); // Crimson body color, Head = "Slash"
 var reforgeLedger = new PersistentLedger();
 var reforgeRun = DelveRun.Start(reforgeMap, new List<AnimaUnit> { reforgeTarget }, reforgeLedger);
 
-var reforgeHeadOptions = ReforgeService.GetBrowseOptions(Part.Head, reforgeTarget, reforgeRun);
-var reforgeExcludesCurrentPass = reforgeHeadOptions.All(c => c.Skill.Name != reforgeTarget.Head.Name);
-Console.WriteLine($"  [{(reforgeExcludesCurrentPass ? "PASS" : "FAIL")}] Reforge's Head browse list excludes {reforgeTarget.Head.Name} (the target's own current Head skill), {reforgeHeadOptions.Count} options remain");
+var reforgeCrimsonOptions = ReforgeService.GetBrowseOptionsByColor(AnimaColor.Crimson);
+var reforgeBrowseCountPass = reforgeCrimsonOptions.Count == 9; // 3 Crimson Archetypes (Ember/Reaper/Marksman) x 3 Parts (Head/Frame/Tail)
+var reforgeBrowseNoCrestPass = reforgeCrimsonOptions.All(c => c.Skill.Part != Part.Crest);
+var reforgeBrowseUnfilteredPass = reforgeCrimsonOptions.Any(c => c.Skill.Part == Part.Head && c.Skill.Name == reforgeTarget.Head.Name); // "Slash" IS offered -- no target-owned exclusion at this step anymore
+Console.WriteLine($"  [{(reforgeBrowseCountPass && reforgeBrowseNoCrestPass && reforgeBrowseUnfilteredPass ? "PASS" : "FAIL")}] GetBrowseOptionsByColor(Crimson) returns {reforgeCrimsonOptions.Count} options across all 3 Parts (Crest never included), unfiltered by any target -- includes {reforgeTarget.Head.Name} even though {reforgeTarget.Id} already has it equipped");
 
-var reforgeSameColorPick = reforgeHeadOptions.First(c => c.Skill.Color == reforgeTarget.Color);
-var reforgeCrossColorPick = reforgeHeadOptions.First(c => c.Skill.Color != reforgeTarget.Color);
+var reforgeHeadOptions = reforgeCrimsonOptions.Where(c => c.Skill.Part == Part.Head).ToList();
+var reforgeSameColorPick = reforgeHeadOptions.First(c => c.Skill.Color == reforgeTarget.Color && c.Skill.Name != reforgeTarget.Head.Name);
+var reforgeNoOpPick = reforgeHeadOptions.First(c => c.Skill.Name == reforgeTarget.Head.Name); // "Slash" itself -- a no-op for reforgeTarget
+
+// ---- Reforge: no-op exclusion moved to the target-selection step (NEW) -- a skill the target
+// already has equipped in that Part must skip/disable that Anima as a valid pick, since the
+// browse step itself can no longer filter it out (the target isn't known yet there). ----
+var reforgeNoOpExcludesTargetPass = ReforgeService.IsNoOpForTarget(reforgeTarget, reforgeNoOpPick.Skill, reforgeRun)
+    && !ReforgeService.GetValidTargets([reforgeTarget], reforgeNoOpPick.Skill, reforgeRun).Any();
+var reforgeNonNoOpIncludesTargetPass = !ReforgeService.IsNoOpForTarget(reforgeTarget, reforgeSameColorPick.Skill, reforgeRun)
+    && ReforgeService.GetValidTargets([reforgeTarget], reforgeSameColorPick.Skill, reforgeRun).Count == 1;
+Console.WriteLine($"  [{(reforgeNoOpExcludesTargetPass && reforgeNonNoOpIncludesTargetPass ? "PASS" : "FAIL")}] IsNoOpForTarget/GetValidTargets skip {reforgeTarget.Id} for a pick it already has equipped ({reforgeNoOpPick.Skill.Name}), but include it for a genuinely different pick ({reforgeSameColorPick.Skill.Name})");
+
+// Cross-color pick has to come from browsing a DIFFERENT color -- GetBrowseOptionsByColor(color)
+// only ever returns that one color's skills now (unlike the old Part-first GetBrowseOptions(Part,
+// target), which returned all 4 colors at once for a given Part).
+var reforgeCrossColorPick = ReforgeService.GetBrowseOptionsByColor(AnimaColor.Onyx).First(c => c.Skill.Part == Part.Head);
 var reforgeSameColorCostPass = ReforgeService.GetAcceptCost(reforgeSameColorPick.Skill, reforgeTarget) == ReforgeService.SameColorAcceptCost;
 var reforgeCrossColorCostPass = ReforgeService.GetAcceptCost(reforgeCrossColorPick.Skill, reforgeTarget) == ReforgeService.DifferentColorAcceptCost;
 Console.WriteLine($"  [{(reforgeSameColorCostPass ? "PASS" : "FAIL")}] A same-color pick ({reforgeSameColorPick.ArchetypeName}'s {reforgeSameColorPick.Skill.Name}) costs {ReforgeService.SameColorAcceptCost} Wisp");
 Console.WriteLine($"  [{(reforgeCrossColorCostPass ? "PASS" : "FAIL")}] A cross-color pick ({reforgeCrossColorPick.ArchetypeName}'s {reforgeCrossColorPick.Skill.Name}, {reforgeCrossColorPick.Skill.Color}) costs {ReforgeService.DifferentColorAcceptCost} Wisp");
 
 reforgeLedger.Add(ResourceType.Wisp, ReforgeService.SameColorAcceptCost);
-var reforgeAcceptSuccess = ReforgeService.Accept(reforgeRun, reforgeTarget, Part.Head, reforgeSameColorPick.Skill, reforgeLedger);
-var reforgeAcceptPass = reforgeAcceptSuccess
+var reforgeAcceptResult = ReforgeService.Accept(reforgeRun, reforgeTarget, reforgeSameColorPick.Skill, reforgeLedger);
+var reforgeAcceptPass = reforgeAcceptResult.Success
     && reforgeLedger.GetBalance(ResourceType.Wisp) == 0
     && reforgeTarget.Head.Name == "Slash" // target's REAL Head field must be untouched
     && reforgeRun.GetEffectiveSkill(reforgeTarget, Part.Head).Name == reforgeSameColorPick.Skill.Name;
 Console.WriteLine($"  [{(reforgeAcceptPass ? "PASS" : "FAIL")}] Successful Reforge Accept deducts its exact Wisp cost, records a run-scoped override, and leaves the target's real Head field ({reforgeTarget.Head.Name}) untouched");
 
-// ---- Reforge: insufficient Wisp rejects Accept before touching the ledger or recording anything ----
+// ---- Reforge: insufficient Wisp returns a DISTINCT InsufficientWisp outcome (not a generic
+// exception/bool), and nothing partially commits -- ledger untouched, no override recorded, so a
+// later Reforge attempt at the same node starts clean ----
 var poorReforgeMap = MapGenerator.Generate(new Random(100));
 var poorReforgeTarget = SampleAnimas.CreateEmber();
 var poorReforgeLedger = new PersistentLedger();
 var poorReforgeRun = DelveRun.Start(poorReforgeMap, new List<AnimaUnit> { poorReforgeTarget }, poorReforgeLedger);
 poorReforgeLedger.Add(ResourceType.Wisp, ReforgeService.SameColorAcceptCost - 1); // one short
 
-var poorReforgeOptions = ReforgeService.GetBrowseOptions(Part.Head, poorReforgeTarget, poorReforgeRun);
-var poorReforgePick = poorReforgeOptions.First(c => c.Skill.Color == poorReforgeTarget.Color);
-var poorReforgeAcceptSuccess = ReforgeService.Accept(poorReforgeRun, poorReforgeTarget, Part.Head, poorReforgePick.Skill, poorReforgeLedger);
-var poorReforgePass = !poorReforgeAcceptSuccess
+var poorReforgeOptions = ReforgeService.GetBrowseOptionsByColor(poorReforgeTarget.Color).Where(c => c.Skill.Part == Part.Head).ToList();
+var poorReforgePick = poorReforgeOptions.First(c => c.Skill.Color == poorReforgeTarget.Color && c.Skill.Name != poorReforgeTarget.Head.Name);
+var poorReforgeAcceptResult = ReforgeService.Accept(poorReforgeRun, poorReforgeTarget, poorReforgePick.Skill, poorReforgeLedger);
+var poorReforgePass = poorReforgeAcceptResult.Outcome == ReforgeService.ReforgeAcceptOutcome.InsufficientWisp
+    && poorReforgeAcceptResult.Cost == ReforgeService.SameColorAcceptCost
+    && poorReforgeAcceptResult.WispBalance == ReforgeService.SameColorAcceptCost - 1
     && poorReforgeLedger.GetBalance(ResourceType.Wisp) == ReforgeService.SameColorAcceptCost - 1 // untouched
     && poorReforgeRun.GetEffectiveSkill(poorReforgeTarget, Part.Head).Name == poorReforgeTarget.Head.Name; // no override recorded
-Console.WriteLine($"  [{(poorReforgePass ? "PASS" : "FAIL")}] Insufficient Wisp rejects Reforge Accept before charging or recording any override");
+Console.WriteLine($"  [{(poorReforgePass ? "PASS" : "FAIL")}] Insufficient Wisp returns a distinct InsufficientWisp outcome (needed {poorReforgeAcceptResult.Cost}, had {poorReforgeAcceptResult.WispBalance}) before charging or recording any override");
 
-// ---- Reforge: Crest is out of scope entirely (not merely unimplemented) ----
-var reforgeCrestThrew = false;
-try { ReforgeService.GetBrowseOptions(Part.Crest, reforgeTarget); }
-catch (InvalidOperationException) { reforgeCrestThrew = true; }
-Console.WriteLine($"  [{(reforgeCrestThrew ? "PASS" : "FAIL")}] Reforge's browse list rejects Crest -- it contributes no deck cards, so it's out of scope entirely");
+// ---- Reforge: Crest is out of scope entirely (not merely unimplemented) -- structurally, via
+// ReforgePartPool never including it, for EVERY color, not just Crimson ----
+var reforgeCrestNeverOfferedPass = Enum.GetValues<AnimaColor>()
+    .Where(c => c is AnimaColor.Crimson or AnimaColor.Onyx or AnimaColor.Verdant or AnimaColor.Azure)
+    .All(c => ReforgeService.GetBrowseOptionsByColor(c).All(opt => opt.Skill.Part != Part.Crest));
+Console.WriteLine($"  [{(reforgeCrestNeverOfferedPass ? "PASS" : "FAIL")}] Reforge's browse list never offers Crest for any of the 4 colors -- it contributes no deck cards, so it's out of scope entirely");
 
 // ---- Reforge: hybrid (Vulcan/Mirage) cost BUGFIX -- a hybrid has no single true body color, so
 // EVERY pick costs 80, even one matching one of its two component colors. (An earlier version
-// wrongly treated a component-color match as "same-color" = 40; corrected in ReforgeService.) ----
+// wrongly treated a component-color match as "same-color" = 40; corrected in ReforgeService.)
+// Re-verified this session (asked for explicitly): still correct now that color is picked before
+// the Anima -- GetAcceptCost only ever needs both values at Accept time, order picked doesn't
+// matter. ----
 var hybridVulcanTarget = SampleAnimas.CreateEmber(); // reuse Ember's real Crimson skills, just relabel the body Color
 hybridVulcanTarget.Id = "TestHybridVulcan";
 hybridVulcanTarget.Color = AnimaColor.Vulcan;
@@ -512,13 +538,11 @@ hybridMirageTarget.Color = AnimaColor.Mirage;
 hybridMirageTarget.BaseStats = WeavingService.ColorStats[AnimaColor.Mirage];
 hybridMirageTarget.CurrentHp = hybridMirageTarget.BaseStats.MaxHp;
 
-var hybridVulcanOptions = ReforgeService.GetBrowseOptions(Part.Head, hybridVulcanTarget);
-var hybridVulcanCrimsonPick = hybridVulcanOptions.First(c => c.Skill.Color == AnimaColor.Crimson); // matches one component color
-var hybridVulcanOnyxPick = hybridVulcanOptions.First(c => c.Skill.Color == AnimaColor.Onyx);        // matches the OTHER component color
-var hybridVulcanVerdantPick = hybridVulcanOptions.First(c => c.Skill.Color == AnimaColor.Verdant);   // matches neither
-var hybridMirageOptions = ReforgeService.GetBrowseOptions(Part.Head, hybridMirageTarget);
-var hybridMirageVerdantPick = hybridMirageOptions.First(c => c.Skill.Color == AnimaColor.Verdant); // matches one component color
-var hybridMirageAzurePick = hybridMirageOptions.First(c => c.Skill.Color == AnimaColor.Azure);      // matches the OTHER component color
+var hybridVulcanCrimsonPick = ReforgeService.GetBrowseOptionsByColor(AnimaColor.Crimson).First(c => c.Skill.Part == Part.Head); // matches one component color
+var hybridVulcanOnyxPick = ReforgeService.GetBrowseOptionsByColor(AnimaColor.Onyx).First(c => c.Skill.Part == Part.Head);        // matches the OTHER component color
+var hybridVulcanVerdantPick = ReforgeService.GetBrowseOptionsByColor(AnimaColor.Verdant).First(c => c.Skill.Part == Part.Head);   // matches neither
+var hybridMirageVerdantPick = ReforgeService.GetBrowseOptionsByColor(AnimaColor.Verdant).First(c => c.Skill.Part == Part.Head); // matches one component color
+var hybridMirageAzurePick = ReforgeService.GetBrowseOptionsByColor(AnimaColor.Azure).First(c => c.Skill.Part == Part.Head);      // matches the OTHER component color
 
 var hybridCostPass =
     ReforgeService.GetAcceptCost(hybridVulcanCrimsonPick.Skill, hybridVulcanTarget) == ReforgeService.DifferentColorAcceptCost
@@ -530,15 +554,10 @@ Console.WriteLine($"  [{(hybridCostPass ? "PASS" : "FAIL")}] Hybrid targets alwa
     $"(Vulcan+{hybridVulcanCrimsonPick.Skill.Color}={ReforgeService.GetAcceptCost(hybridVulcanCrimsonPick.Skill, hybridVulcanTarget)}, Vulcan+{hybridVulcanOnyxPick.Skill.Color}={ReforgeService.GetAcceptCost(hybridVulcanOnyxPick.Skill, hybridVulcanTarget)}, " +
     $"Mirage+{hybridMirageVerdantPick.Skill.Color}={ReforgeService.GetAcceptCost(hybridMirageVerdantPick.Skill, hybridMirageTarget)}, Mirage+{hybridMirageAzurePick.Skill.Color}={ReforgeService.GetAcceptCost(hybridMirageAzurePick.Skill, hybridMirageTarget)})");
 
-// ---- Reforge: browse-list behavior for a hybrid target is otherwise completely normal -- full
-// cross-color option set, current skill excluded, no narrowing/duplication tied to the hybrid's
-// two component colors (asked for explicitly; confirmed by reading GetBrowseOptions, which never
-// reads target.Color at all -- only GetAcceptCost branches on hybrid-ness) ----
-var hybridBrowseCountPass = hybridVulcanOptions.Count == 11; // 12 Archetypes' Head skills, minus the 1 excluded current skill (Slash)
-var hybridBrowseExcludesCurrentPass = hybridVulcanOptions.All(c => c.Skill.Name != hybridVulcanTarget.Head.Name);
-var hybridBrowseAllColorsPass = hybridVulcanOptions.Select(c => c.Skill.Color).Distinct().Count() == 4; // Crimson/Onyx/Verdant/Azure all represented, no narrowing
-var hybridBrowseNoDuplicatesPass = hybridVulcanOptions.Select(c => c.Skill.Name).Distinct().Count() == hybridVulcanOptions.Count;
-Console.WriteLine($"  [{(hybridBrowseCountPass && hybridBrowseExcludesCurrentPass && hybridBrowseAllColorsPass && hybridBrowseNoDuplicatesPass ? "PASS" : "FAIL")}] A hybrid (Vulcan) target's Head browse list is the normal full cross-color set ({hybridVulcanOptions.Count} options, all 4 colors represented, {hybridVulcanTarget.Head.Name} excluded, no duplicates) -- no unintended narrowing tied to its Onyx+Crimson component colors");
+// ---- Reforge: GetBrowseOptionsByColor no longer takes a target parameter AT ALL (a structural
+// change, not just a behavioral one) -- so "the browse list can't depend on the target's
+// hybrid-ness" is now guaranteed by the method signature itself, not something that needs its own
+// regression check the way the old Part-first GetBrowseOptions(Part, target) design did. ----
 
 // ---- Reforge: override survives across MULTIPLE combats within the same Delve. This matters
 // because the deck rebuilds fresh every StartCombat() call (CombatEngine.BuildDeck), so the
@@ -561,8 +580,8 @@ var multiCombatRun = DelveRun.Start(multiCombatMap, multiCombatTeam, multiCombat
 // Pick "Rend" (Reaper's Head, Crimson -- same body color as Ember, so this also exercises the
 // 40-Wisp same-color path) -- deliberately a skill no one else on the team already has at Head, so
 // counting its occurrences in a built deck unambiguously identifies the override's cards.
-var multiCombatPick = ReforgeService.GetBrowseOptions(Part.Head, multiCombatAnima, multiCombatRun).First(c => c.Skill.Name == "Rend");
-var multiCombatAccepted = ReforgeService.Accept(multiCombatRun, multiCombatAnima, Part.Head, multiCombatPick.Skill, multiCombatPersistentLedger);
+var multiCombatPick = ReforgeService.GetBrowseOptionsByColor(AnimaColor.Crimson).First(c => c.Skill.Name == "Rend");
+var multiCombatAcceptResult = ReforgeService.Accept(multiCombatRun, multiCombatAnima, multiCombatPick.Skill, multiCombatPersistentLedger);
 
 bool DeckHasOverrideAndNotOriginal(CombatState state) =>
     state.DrawPile.Concat(state.Hand).Concat(state.DiscardPile).Count(s => s.Part == Part.Head && s.Name == "Rend") == 3
@@ -588,7 +607,7 @@ var multiCombatLogB = new List<string>();
 var (multiCombatWonB, _, _) = RunDelveFight(multiCombatStateB, new List<Artifact>(), multiCombatLogB, multiCombatRun);
 var multiCombatDeckBPass = multiCombatWonB && DeckHasOverrideAndNotOriginal(multiCombatStateB);
 
-var multiCombatOverallPass = multiCombatAccepted && multiCombatDeckAPass && multiCombatDeckBPass;
+var multiCombatOverallPass = multiCombatAcceptResult.Success && multiCombatDeckAPass && multiCombatDeckBPass;
 Console.WriteLine($"  [{(multiCombatOverallPass ? "PASS" : "FAIL")}] Reforge override on {multiCombatAnima.Id}'s Head (Slash -> Rend) survives across TWO separate combats in the same Delve -- Combat A deck: {(multiCombatDeckAPass ? "3x Rend, 0x Slash" : "MISMATCH")}, Combat B deck (fresh CombatEngine, same DelveRun): {(multiCombatDeckBPass ? "3x Rend, 0x Slash" : "MISMATCH")}");
 
 // ==== REWARDS — RewardService node-outcome grants ====
@@ -794,6 +813,93 @@ for (var i = 0; i < 200; i++)
 }
 var idUniquenessPass = idUniquenessRoster.Animas.Select(a => a.Id).Distinct().Count() == 200;
 Console.WriteLine($"  [{(idUniquenessPass ? "PASS" : "FAIL")}] 200 materialized Animas all receive distinct Ids, no collisions ({idUniquenessRoster.Animas.Select(a => a.Id).Distinct().Count()}/200 unique)");
+
+// ---- Starter-trio roll — StarterAnimaService (replaces the old hardcoded Ember/Boulder/Sprout) ----
+// Dominant is fully deterministic (that archetype's own real 4-skill set); only which archetype and
+// R1/R2 are rolled. Same "structurally identical to Weave/Boss-hatch output" standard BossHatchService
+// itself is held to (real R1/R2, IsFullyPure/GenomeFactory need zero special-casing).
+Console.WriteLine();
+Console.WriteLine("================ Starter Trio: StarterAnimaService.RollStarterTrio ================");
+const int StarterTrials = 2000;
+var starterRng = new Random(555);
+var starterRolls = new List<IReadOnlyList<StarterAnimaRoll>>();
+for (var i = 0; i < StarterTrials; i++)
+{
+    starterRolls.Add(StarterAnimaService.RollStarterTrio(starterRng));
+}
+
+var starterCountPass = starterRolls.All(r => r.Count == 3);
+Console.WriteLine($"  [{(starterCountPass ? "PASS" : "FAIL")}] RollStarterTrio always returns exactly 3 slots ({StarterTrials} trials)");
+
+var starterOrderPass = starterRolls.All(r =>
+    r[0].Genome.Color == AnimaColor.Crimson && r[1].Genome.Color == AnimaColor.Onyx && r[2].Genome.Color == AnimaColor.Verdant);
+Console.WriteLine($"  [{(starterOrderPass ? "PASS" : "FAIL")}] Presentation order is always Crimson/Onyx/Verdant, Azure never appears ({StarterTrials} trials)");
+
+// Archetype name must be a real archetype of that exact color (looked up fresh from PrimitiveRoster,
+// not assumed), and the Dominant on every part must be an EXACT, unrolled clone of that archetype's
+// own real skill -- deterministic once the archetype is picked, never itself randomized.
+var starterArchetypesByColor = new[] { AnimaColor.Crimson, AnimaColor.Onyx, AnimaColor.Verdant }.ToDictionary(
+    c => c,
+    c => PrimitiveRoster.All.Select(e => (e.Name, Anima: e.Factory())).Where(e => e.Anima.Color == c).ToList());
+
+var starterDominantIsArchetypesPass = starterRolls.All(trio => trio.All(roll =>
+{
+    var archetype = starterArchetypesByColor[roll.Genome.Color].FirstOrDefault(a => a.Name == roll.ArchetypeName);
+    return archetype.Anima is not null
+        && roll.Genome.Head.Dominant.Name == archetype.Anima.Head.Name
+        && roll.Genome.Frame.Dominant.Name == archetype.Anima.Frame.Name
+        && roll.Genome.Tail.Dominant.Name == archetype.Anima.Tail.Name
+        && roll.Genome.Crest.Dominant.Name == archetype.Anima.Crest.Name;
+}));
+Console.WriteLine($"  [{(starterDominantIsArchetypesPass ? "PASS" : "FAIL")}] Every slot's ArchetypeName is a real archetype of that slot's color, and Dominant per part is an exact, deterministic match to that archetype's own real skill set ({StarterTrials * 3} slots checked)");
+
+// IsFullyPure must be ALWAYS true (not merely probable, unlike Boss-hatch's ~9.15%) -- every
+// Dominant here comes from a single archetype whose own body Color already equals the genome's
+// Color, by construction.
+var starterAlwaysFullyPurePass = starterRolls.All(trio => trio.All(roll => roll.Genome.IsFullyPure));
+Console.WriteLine($"  [{(starterAlwaysFullyPurePass ? "PASS" : "FAIL")}] Every starter genome is IsFullyPure==true, always (not probabilistic like Boss-hatch) -- Dominant always matches its own archetype's body Color");
+
+// R1/R2 distribution: pooled across all 3 slots x 2 hidden genes x StarterTrials trials, same
+// 55%-toward-body-Color/15%-each-other weighting BossHatchService.RollOneSkill already uses (reused,
+// not duplicated) -- confirms StarterAnimaService is really calling through to it, not a look-alike.
+var starterHiddenDraws = starterRolls
+    .SelectMany(trio => trio)
+    .SelectMany(roll => new[]
+    {
+        (roll.Genome.Color, roll.Genome.Head.R1), (roll.Genome.Color, roll.Genome.Head.R2),
+        (roll.Genome.Color, roll.Genome.Frame.R1), (roll.Genome.Color, roll.Genome.Frame.R2),
+        (roll.Genome.Color, roll.Genome.Tail.R1), (roll.Genome.Color, roll.Genome.Tail.R2),
+        (roll.Genome.Color, roll.Genome.Crest.R1), (roll.Genome.Color, roll.Genome.Crest.R2),
+    })
+    .ToList();
+ReportBucket("Starter R1/R2 Color matches body Color", starterHiddenDraws.Count(d => d.Item2.Color == d.Color), starterHiddenDraws.Count, 0.55);
+
+// Archetype pick should be roughly uniform across each color's 3 real archetypes (statistical).
+foreach (var color in new[] { AnimaColor.Crimson, AnimaColor.Onyx, AnimaColor.Verdant })
+{
+    var slotIndex = color == AnimaColor.Crimson ? 0 : color == AnimaColor.Onyx ? 1 : 2;
+    var namesForColor = starterArchetypesByColor[color].Select(a => a.Name).ToList();
+    foreach (var name in namesForColor)
+    {
+        var observed = starterRolls.Count(trio => trio[slotIndex].ArchetypeName == name);
+        ReportBucket($"Starter {color} archetype={name}", observed, StarterTrials, 1.0 / namesForColor.Count);
+    }
+}
+
+// Materializes exactly like a Weave/Boss-hatch genome: real R1/R2 present, GenomeFactory.CreateGenome
+// round-trips via ExtractGenome (not the CreateFounderGenome placeholder fallback -- see
+// GenomeFactory's own comment on why that fallback is no longer reachable via a real starter Anima).
+var starterMaterializeRoster = new SanctumRoster();
+var starterRollForMaterialize = StarterAnimaService.RollStarterTrio(new Random(9001))[0];
+var starterMaterialized = AnimaMaterializationService.Create(starterRollForMaterialize.Genome, "TestStarter", starterMaterializeRoster);
+var starterMaterializePass = starterMaterialized.Gen == 1 && starterMaterialized.ParentAId == null && starterMaterialized.ParentBId == null
+    && starterMaterialized.HeadR1 is not null && starterMaterialized.HeadR2 is not null
+    && starterMaterialized.CrestR1 is not null && starterMaterialized.CrestR2 is not null;
+var starterGenomeRoundTrip = GenomeFactory.CreateGenome(starterMaterialized); // must use ExtractGenome, not throw, not fall back to founder synthesis
+var starterRoundTripPass = starterGenomeRoundTrip.Head.R1.Name == starterMaterialized.HeadR1!.Name
+    && starterGenomeRoundTrip.Head.R2.Name == starterMaterialized.HeadR2!.Name
+    && starterGenomeRoundTrip.Color == starterMaterialized.Color;
+Console.WriteLine($"  [{(starterMaterializePass && starterRoundTripPass ? "PASS" : "FAIL")}] A materialized starter Anima has real recorded R1/R2 (HeadR1 not null) and GenomeFactory.CreateGenome round-trips it via ExtractGenome, zero special-casing needed, same standard as a Weave/Boss-hatch Anima");
 
 // ---- Reward tier ladder sanity ----
 Console.WriteLine();
@@ -1275,16 +1381,18 @@ var emberCoreMap = MapGenerator.Generate(new Random(2468));
 var emberCoreTarget = SampleAnimas.CreateEmber();
 var emberCoreLedgerForRun = new PersistentLedger();
 var emberCoreRun = DelveRun.Start(emberCoreMap, new List<AnimaUnit> { emberCoreTarget }, emberCoreLedgerForRun);
-var emberCorePickCandidate = ReforgeService.GetBrowseOptions(Part.Head, emberCoreTarget, emberCoreRun)
-    .First(c => c.Skill.Color != emberCoreTarget.Color); // cross-color pick -> 80 Wisp full price
+// Cross-color pick has to come from browsing a DIFFERENT color -- GetBrowseOptionsByColor(color)
+// only ever returns that one color's skills now (see the same fix earlier in this file).
+var emberCorePickCandidate = ReforgeService.GetBrowseOptionsByColor(AnimaColor.Onyx)
+    .First(c => c.Skill.Part == Part.Head); // cross-color pick (Onyx, Ember's target is Crimson) -> 80 Wisp full price
 var emberCoreFullCost = ReforgeService.GetAcceptCost(emberCorePickCandidate.Skill, emberCoreTarget);
 
 var emberCoreLedger = new PersistentLedger();
 emberCoreLedger.Add(ResourceType.Wisp, emberCoreFullCost); // full price -- discount should leave leftover
-var emberCoreAcceptSuccess = ReforgeService.Accept(emberCoreRun, emberCoreTarget, Part.Head, emberCorePickCandidate.Skill, emberCoreLedger, emberCoreRunLedger);
+var emberCoreAcceptResult = ReforgeService.Accept(emberCoreRun, emberCoreTarget, emberCorePickCandidate.Skill, emberCoreLedger, emberCoreRunLedger);
 var expectedDiscountedCost = (int)Math.Round(emberCoreFullCost * 0.8);
 var expectedLeftover = emberCoreFullCost - expectedDiscountedCost;
-var emberCorePass = emberCoreAcceptSuccess && emberCoreLedger.GetBalance(ResourceType.Wisp) == expectedLeftover;
+var emberCorePass = emberCoreAcceptResult.Success && emberCoreLedger.GetBalance(ResourceType.Wisp) == expectedLeftover;
 Console.WriteLine($"  [{(emberCorePass ? "PASS" : "FAIL")}] Ember Core discounts a Reforge Accept by 20% (full price {emberCoreFullCost} -> discounted {expectedDiscountedCost}, {expectedLeftover} Wisp left over)");
 
 var noEmberCoreMap = MapGenerator.Generate(new Random(2469));
@@ -1293,8 +1401,8 @@ var noEmberCoreLedgerForRun = new PersistentLedger();
 var noEmberCoreRun = DelveRun.Start(noEmberCoreMap, new List<AnimaUnit> { noEmberCoreTarget }, noEmberCoreLedgerForRun);
 var noEmberCoreLedger = new PersistentLedger();
 noEmberCoreLedger.Add(ResourceType.Wisp, emberCoreFullCost);
-var noEmberCoreAcceptSuccess = ReforgeService.Accept(noEmberCoreRun, noEmberCoreTarget, Part.Head, emberCorePickCandidate.Skill, noEmberCoreLedger); // no runLedger -- baseline
-var noEmberCorePass = noEmberCoreAcceptSuccess && noEmberCoreLedger.GetBalance(ResourceType.Wisp) == 0;
+var noEmberCoreAcceptResult = ReforgeService.Accept(noEmberCoreRun, noEmberCoreTarget, emberCorePickCandidate.Skill, noEmberCoreLedger); // no runLedger -- baseline
+var noEmberCorePass = noEmberCoreAcceptResult.Success && noEmberCoreLedger.GetBalance(ResourceType.Wisp) == 0;
 Console.WriteLine($"  [{(noEmberCorePass ? "PASS" : "FAIL")}] Baseline Reforge Accept (no Artifact) charges full price ({emberCoreFullCost} -> {noEmberCoreLedger.GetBalance(ResourceType.Wisp)})");
 
 // Ember Core's own description ("Reforge and Augment costs are reduced by 20%") plus the new
@@ -2207,19 +2315,36 @@ foreach (var node in delvePath)
         {
             Anima.Core.Economy.ArtifactService.OnNodeVisited(delveRunLedger, delvePlayerTeam);
 
-            // Deterministic browse-and-pick now, no random roll: Aspect = Head, target = the
-            // front-liner (same "always applied to the front-liner" placeholder policy the old
-            // roll-based flow used), pick = the cheapest (same-color, if any exist) option, same
-            // "accept whenever affordable, unconditionally" placeholder decision policy used
-            // elsewhere in this simulation (Shop Wares, Ember pickups) -- there being no real
-            // player-choice UI yet.
+            // Color-first flow (REORDERED this session, was Part-first): pick a color, browse
+            // skills across all 3 Parts for it, then pick a target for which the pick isn't a
+            // no-op (see ReforgeService.IsNoOpForTarget) -- the exclusion that used to happen at
+            // browse time now happens here instead. target = the front-liner (same "always applied
+            // to the front-liner" placeholder policy the old flow used); color = the front-liner's
+            // own body color when it has a real one (so this also naturally lands on the 40-Wisp
+            // same-color path, same preference the old flow expressed differently), or a random
+            // real color for a hybrid (Vulcan/Mirage never gets the same-color discount anyway, see
+            // GetAcceptCost). Accept whenever affordable, unconditionally -- same "no real
+            // player-choice UI yet" placeholder decision policy used elsewhere in this simulation
+            // (Shop Wares, Ember pickups).
             var delveReforgeTarget = delvePlayerTeam.OrderBy(a => a.Position).First();
-            var delveReforgeOptions = ReforgeService.GetBrowseOptions(Part.Head, delveReforgeTarget, delveRunState);
-            var delveReforgePick = delveReforgeOptions.FirstOrDefault(c => c.Skill.Color == delveReforgeTarget.Color)
-                ?? delveReforgeOptions[delveSimRng.Next(delveReforgeOptions.Count)];
+            var delveReforgeColor = delveReforgeTarget.Color is AnimaColor.Vulcan or AnimaColor.Mirage
+                ? new[] { AnimaColor.Crimson, AnimaColor.Onyx, AnimaColor.Verdant, AnimaColor.Azure }[delveSimRng.Next(4)]
+                : delveReforgeTarget.Color;
+
+            var delveReforgeValidOptions = ReforgeService.GetBrowseOptionsByColor(delveReforgeColor)
+                .Where(c => !ReforgeService.IsNoOpForTarget(delveReforgeTarget, c.Skill, delveRunState))
+                .ToList();
+
+            if (delveReforgeValidOptions.Count == 0)
+            {
+                Console.WriteLine($"  Reforge browse ({delveReforgeColor}): every option is already equipped on {delveReforgeTarget.Id} -- nothing to swap, Declining.");
+                break;
+            }
+
+            var delveReforgePick = delveReforgeValidOptions[delveSimRng.Next(delveReforgeValidOptions.Count)];
             var previewCost = Anima.Core.Economy.ArtifactService.ApplyEmberCoreDiscount(
                 ReforgeService.GetAcceptCost(delveReforgePick.Skill, delveReforgeTarget), delveRunLedger);
-            Console.WriteLine($"  Reforge browse (Head): picking {delveReforgePick.ArchetypeName}'s {delveReforgePick.Skill.Name} for {delveReforgeTarget.Id}, cost {previewCost} Wisp.");
+            Console.WriteLine($"  Reforge browse ({delveReforgeColor}): picking {delveReforgePick.ArchetypeName}'s {delveReforgePick.Skill.Name} ({delveReforgePick.Skill.Part}) for {delveReforgeTarget.Id}, cost {previewCost} Wisp.");
 
             if (!delvePersistentLedger.CanAfford(ResourceType.Wisp, previewCost))
             {
@@ -2227,11 +2352,11 @@ foreach (var node in delvePath)
                 break;
             }
 
-            var accepted = ReforgeService.Accept(delveRunState, delveReforgeTarget, Part.Head, delveReforgePick.Skill, delvePersistentLedger, delveRunLedger);
-            Console.WriteLine(accepted
-                ? $"  Accepted -- {delveReforgeTarget.Id}'s Head is now {delveReforgePick.Skill.Name} for the rest of this Delve (real Head field untouched: {delveReforgeTarget.Head.Name})."
+            var acceptResult = ReforgeService.Accept(delveRunState, delveReforgeTarget, delveReforgePick.Skill, delvePersistentLedger, delveRunLedger);
+            Console.WriteLine(acceptResult.Success
+                ? $"  Accepted -- {delveReforgeTarget.Id}'s {delveReforgePick.Skill.Part} is now {delveReforgePick.Skill.Name} for the rest of this Delve (real field untouched)."
                 : "  Accept unexpectedly failed despite passing the affordability check.");
-            if (!accepted) delveGaps.Add($"{label}: Reforge Accept failed despite CanAfford having just passed -- possible race in the cost preview vs. actual charge.");
+            if (!acceptResult.Success) delveGaps.Add($"{label}: Reforge Accept failed despite CanAfford having just passed -- possible race in the cost preview vs. actual charge.");
             PrintResourceSnapshot(delvePersistentLedger, delveRunLedger);
             break;
         }

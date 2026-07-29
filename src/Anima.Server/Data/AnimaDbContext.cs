@@ -14,6 +14,7 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
     public DbSet<PendingPurchasedEmberEntity> PendingPurchasedEmbers => Set<PendingPurchasedEmberEntity>();
     public DbSet<PendingBossHatchEntity> PendingBossHatches => Set<PendingBossHatchEntity>();
     public DbSet<DelveHistoryEntity> DelveHistories => Set<DelveHistoryEntity>();
+    public DbSet<PendingStarterRevealEntity> PendingStarterReveals => Set<PendingStarterRevealEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -72,6 +73,12 @@ public class AnimaDbContext(DbContextOptions<AnimaDbContext> options) : DbContex
         {
             e.HasIndex(h => new { h.AccountId, h.AnimaId });
             e.Property(h => h.Version).IsConcurrencyToken();
+        });
+
+        modelBuilder.Entity<PendingStarterRevealEntity>(e =>
+        {
+            e.HasIndex(r => r.AccountId).IsUnique();
+            e.Property(r => r.Version).IsConcurrencyToken();
         });
     }
 

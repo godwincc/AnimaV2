@@ -1,0 +1,93 @@
+<div style="background: radial-gradient(ellipse at 30% 20%, #4a3a2e 0%, #2b2018 45%, #1a130e 100%); padding: 1.25rem; border-radius: 12px; font-family: var(--font-sans);">
+<h2 class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;">Shop augment section showing three team Anima, each with four skills and options to add augments</h2>
+
+<div style="color:#c9b89e; font-size:13px; margin-bottom:12px;">Augment a skill — spend banked Ember</div>
+
+<div id="cards" style="display:flex; flex-direction:column; gap:14px;"></div>
+</div>
+
+<script>
+const COLOR_HEX = { Crimson:'#d9634a', Onyx:'#8f8f96', Verdant:'#5fae6e', Azure:'#5b9bd5' };
+const AUG_ICON = { 'Increase Effect':'ti-trending-up', 'AoE Damage':'ti-burst', 'Decrease Cost':'ti-coin-off', 'Extend':'ti-clock-plus' };
+
+const team = [
+  { name:'Ember', color:'Crimson', skills:[
+      { name:'Slash', icon:'ti-sword', augs:['Increase Effect'] },
+      { name:'Charge', icon:'ti-bolt', augs:[] },
+      { name:'Execute', icon:'ti-sword', augs:['AoE Damage','Decrease Cost'] },
+      { name:'Reckless', icon:'ti-bolt', augs:[] }
+  ]},
+  { name:'Boulder', color:'Onyx', skills:[
+      { name:'Bash', icon:'ti-sword', augs:[] },
+      { name:'Hardened', icon:'ti-shield', augs:['Extend'] },
+      { name:'Taunt', icon:'ti-bolt', augs:[] },
+      { name:'Courage', icon:'ti-bolt', augs:['Increase Effect'] }
+  ]},
+  { name:'Sprout', color:'Verdant', skills:[
+      { name:'Smite', icon:'ti-sword', augs:[] },
+      { name:'Guiding Light', icon:'ti-heart', augs:['Increase Effect','Decrease Cost'] },
+      { name:'Lifebloom', icon:'ti-heart', augs:[] },
+      { name:'Soul Link', icon:'diamond', augs:[] }
+  ]}
+];
+
+const cardsEl = document.getElementById('cards');
+
+team.forEach(anima => {
+  const hex = COLOR_HEX[anima.color];
+  const card = document.createElement('div');
+  card.style.cssText = 'background:rgba(30,22,16,0.75); border:1px solid rgba(201,184,158,0.2); border-radius:12px; padding:14px 16px; display:flex; gap:16px; align-items:flex-start;';
+
+  const portrait = document.createElement('div');
+  portrait.style.cssText = `flex-shrink:0; width:64px; display:flex; flex-direction:column; align-items:center; gap:6px;`;
+  portrait.innerHTML = `
+    <div style="width:52px;height:52px;border-radius:50%;background:${hex}22;border:1.5px solid ${hex};display:flex;align-items:center;justify-content:center;color:${hex};font-size:20px;font-weight:500;">${anima.name[0]}</div>
+    <div style="font-size:13px;font-weight:500;color:#f0e4d4;text-align:center;">${anima.name}</div>
+    <div style="font-size:11px;color:${hex};">${anima.color}</div>
+  `;
+  card.appendChild(portrait);
+
+  const skillsWrap = document.createElement('div');
+  skillsWrap.style.cssText = 'flex:1; display:grid; grid-template-columns:repeat(4,1fr); gap:10px;';
+
+  anima.skills.forEach(skill => {
+    const skillCard = document.createElement('div');
+    skillCard.style.cssText = 'background:rgba(20,15,10,0.6); border:1px solid rgba(201,184,158,0.15); border-radius:8px; padding:8px; display:flex; flex-direction:column; gap:6px; min-width:0;';
+
+    const iconHtml = skill.icon === 'diamond'
+      ? `<span style="display:inline-block;width:10px;height:10px;background:#e8a03a;transform:rotate(45deg);"></span>`
+      : `<i class="ti ${skill.icon}" style="font-size:14px;color:#e8a03a;" aria-hidden="true"></i>`;
+
+    let augsHtml = '';
+    for (let i = 0; i < 3; i++) {
+      if (skill.augs[i]) {
+        augsHtml += `<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;background:rgba(232,160,58,0.18);border:1px solid rgba(232,160,58,0.5);" title="${skill.augs[i]}"><i class="ti ${AUG_ICON[skill.augs[i]]}" style="font-size:11px;color:#e8a03a;" aria-hidden="true"></i></span>`;
+      } else {
+        augsHtml += `<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;border:1px dashed rgba(201,184,158,0.3);"></span>`;
+      }
+    }
+
+    skillCard.innerHTML = `
+      <div style="display:flex;align-items:center;gap:5px;">
+        ${iconHtml}
+        <span style="font-size:12px;color:#e8cf9a;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${skill.name}</span>
+      </div>
+      <div style="display:flex;gap:4px;">${augsHtml}</div>
+      <button data-anima="${anima.name}" data-skill="${skill.name}" style="font-size:11px; padding:4px 6px; background:transparent; border:1px solid rgba(232,160,58,0.5); color:#e8a03a; border-radius:6px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:3px;" ${skill.augs.length>=3?'disabled':''}>
+        <i class="ti ti-plus" style="font-size:11px;" aria-hidden="true"></i>${skill.augs.length>=3?'Full':'Add'}
+      </button>
+    `;
+    skillsWrap.appendChild(skillCard);
+  });
+
+  card.appendChild(skillsWrap);
+  cardsEl.appendChild(card);
+});
+
+cardsEl.addEventListener('click', e => {
+  const btn = e.target.closest('button[data-skill]');
+  if (btn && !btn.disabled) {
+    sendPrompt(`Add an augment to ${btn.dataset.anima}'s ${btn.dataset.skill}`);
+  }
+});
+</script>

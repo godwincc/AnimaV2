@@ -1,0 +1,91 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/anima_reveal_panel.gd" id="1"]
+
+[node name="AnimaRevealPanel" type="VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 10
+script = ExtResource("1")
+
+[node name="ProgressLabel" type="Label" parent="."]
+layout_mode = 2
+horizontal_alignment = 1
+text = "Starter Anima 1 of 3"
+
+[node name="Portrait" type="ColorRect" parent="."]
+custom_minimum_size = Vector2(96, 96)
+layout_mode = 2
+size_flags_horizontal = 4
+color = Color(0.3, 0.3, 0.3, 1)
+
+[node name="PortraitLabel" type="Label" parent="Portrait"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+horizontal_alignment = 1
+vertical_alignment = 1
+text = "Archetype"
+
+[node name="NameColorGenLabel" type="Label" parent="."]
+layout_mode = 2
+horizontal_alignment = 1
+text = "Color: -- | Gen: 1"
+
+[node name="HSeparator1" type="HSeparator" parent="."]
+layout_mode = 2
+
+[node name="ThreadsHeaderRow" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="ThreadsLabel" type="Label" parent="ThreadsHeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Threads"
+
+[node name="ShowHiddenToggle" type="CheckButton" parent="ThreadsHeaderRow"]
+layout_mode = 2
+text = "Show hidden"
+
+[node name="ThreadsRows" type="VBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="HeadRow" type="Label" parent="ThreadsRows"]
+layout_mode = 2
+text = "Head: --"
+
+[node name="FrameRow" type="Label" parent="ThreadsRows"]
+layout_mode = 2
+text = "Frame: --"
+
+[node name="TailRow" type="Label" parent="ThreadsRows"]
+layout_mode = 2
+text = "Tail: --"
+
+[node name="CrestRow" type="Label" parent="ThreadsRows"]
+layout_mode = 2
+text = "Crest: --"
+
+[node name="HSeparator2" type="HSeparator" parent="."]
+layout_mode = 2
+
+[node name="NameFieldLabel" type="Label" parent="."]
+layout_mode = 2
+text = "Name this Anima:"
+
+[node name="NameLineEdit" type="LineEdit" parent="."]
+layout_mode = 2
+placeholder_text = "Enter a name"
+
+[node name="ErrorLabel" type="Label" parent="."]
+layout_mode = 2
+horizontal_alignment = 1
+visible = false
+text = ""
+
+[node name="ConfirmButton" type="Button" parent="."]
+layout_mode = 2
+text = "Confirm"

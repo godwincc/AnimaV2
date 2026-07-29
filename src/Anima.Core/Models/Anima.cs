@@ -28,11 +28,15 @@ public class Anima : ICombatant
 
     // Hidden R1/R2 genes per part -- the two non-manifesting genes AnimaMaterializationService.
     // Build now carries through from the resolved genome (BUGFIX, see its own comment: these used
-    // to be silently discarded on materialization). Nullable, NOT required: the starter trio
-    // (SampleAnimas' 3 hardcoded founders) never went through Build and has no recorded hidden
-    // genes at all -- GenomeFactory.CreateFounderGenome's synthesized placeholder is what covers
-    // that one remaining case. Null here is the signal GenomeFactory.CreateGenome uses to tell a
-    // "real recorded genome" Anima (Weave/Boss-hatch) apart from a founder.
+    // to be silently discarded on materialization). Nullable, NOT required: this stays nullable for
+    // bare SampleAnimas.CreateX() test fixtures (Ember/Boulder/Sprout/etc., used directly in the
+    // console harness's own Weaving checks) that never go through Build and so have no recorded
+    // hidden genes at all -- GenomeFactory.CreateFounderGenome's synthesized placeholder is what
+    // covers that case. **No longer true of any real player's starter Anima** as of the starter-trio
+    // feature: those are now rolled (StarterAnimaService) and materialized via Build exactly like a
+    // Weave/Boss-hatch Anima, so they always have real HeadR1/HeadR2/etc. Null here is the signal
+    // GenomeFactory.CreateGenome uses to tell a "real recorded genome" Anima apart from a bare test
+    // fixture.
     public Skill? HeadR1 { get; set; }
     public Skill? HeadR2 { get; set; }
     public Skill? FrameR1 { get; set; }

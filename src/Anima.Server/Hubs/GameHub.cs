@@ -87,7 +87,8 @@ public class GameHub(
 
     private static AnimaPartSummary BuildPart(string partName, Skill skill) => new(
         partName, skill.Name, skill.Category.ToString(), skill.BaseShield > 0,
-        BuildSkillDescription(skill), skill.AppliedAugments.Select(a => a.ToString()).ToList());
+        BuildSkillDescription(skill), skill.AppliedAugments.Select(a => a.ToString()).ToList(),
+        skill.Color?.ToString());
 
     // Plain mechanically-accurate description, synthesized from the skill's own real fields --
     // confirmed by reading Models.Skill that no skill anywhere carries actual flavor/effect text
@@ -805,7 +806,8 @@ public class GameHub(
             throw new HubException($"Unknown color '{request.Color}'.");
 
         return ReforgeService.GetBrowseOptionsByColor(color)
-            .Select(c => new ReforgeSkillOption(c.ArchetypeName, c.Skill.Name, c.Skill.Part.ToString(), c.Skill.Color?.ToString() ?? ""))
+            .Select(c => new ReforgeSkillOption(c.ArchetypeName, c.Skill.Name, c.Skill.Part.ToString(), c.Skill.Color?.ToString() ?? "",
+                c.Skill.Category.ToString(), c.Skill.BaseShield > 0, BuildSkillDescription(c.Skill)))
             .ToList();
     }
 
@@ -1313,7 +1315,8 @@ public class GameHub(
     {
         CombatantSummary ToSummary(string side, int index, ICombatant c) => new(
             side, index, c.DisplayName, c.CurrentHp, c.MaxHp, c.Position, c.CurrentHp > 0,
-            c.ActiveStatuses.Select(s => s.Keyword).ToList());
+            c.ActiveStatuses.Select(s => s.Keyword).ToList(),
+            c.ActiveStatuses.FirstOrDefault(s => s.Keyword == "Shield")?.Magnitude ?? 0);
 
         var playerSummaries = state.PlayerTeam.Select((a, i) => ToSummary("Player", i, a)).ToList();
         var enemySummaries = state.EnemyTeam.Select((e, i) => ToSummary("Enemy", i, e)).ToList();
@@ -1322,7 +1325,7 @@ public class GameHub(
             .Select((s, i) =>
             {
                 var owner = state.PlayerTeam.First(a => a.DeckSkills.Contains(s));
-                return new HandCardSummary(i, owner.Id, s.Name, s.Category.ToString(), s.Color?.ToString() ?? "", s.EnergyCost, s.Target.ToString());
+                return new HandCardSummary(i, owner.Id, s.Name, s.Category.ToString(), s.Color?.ToString() ?? "", s.EnergyCost, s.Target.ToString(), BuildSkillDescription(s));
             })
             .ToList();
 

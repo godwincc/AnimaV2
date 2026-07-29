@@ -1,0 +1,56 @@
+<div style="background: radial-gradient(ellipse at 30% 20%, #4a3a2e 0%, #2b2018 45%, #1a130e 100%); padding: 1.25rem; border-radius: 12px; font-family: var(--font-sans); color:#e8cf9a;">
+<h2 class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;">Shop screen with Rest and Wares sections, showing embers and an artifact for sale</h2>
+
+<div style="font-size:13px; color:#c9b89e; font-style:italic; margin-bottom:14px;">A weathered stall, tucked into the hollow.</div>
+
+<div style="background:rgba(30,22,16,0.75); border:1px solid rgba(201,184,158,0.2); border-radius:12px; padding:14px 16px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+  <div style="display:flex; align-items:center; gap:10px;">
+    <i class="ti ti-campfire" style="font-size:20px; color:#e8a03a;" aria-hidden="true"></i>
+    <div>
+      <div style="font-size:14px; font-weight:500; color:#f0e4d4;">Rest</div>
+      <div style="font-size:12px; color:#c9b89e;">Heal 40% max HP</div>
+    </div>
+  </div>
+  <button style="font-size:12px; padding:7px 14px; background:transparent; border:1px solid rgba(232,160,58,0.5); color:#e8a03a; border-radius:6px; cursor:pointer;">Rest — 20 Wisp</button>
+</div>
+
+<div style="background:rgba(30,22,16,0.75); border:1px solid rgba(201,184,158,0.2); border-radius:12px; padding:14px 16px; margin-bottom:14px;">
+  <div style="font-size:14px; font-weight:500; color:#f0e4d4; margin-bottom:2px;">Wares</div>
+  <div style="font-size:11px; color:#c9b89e; margin-bottom:10px;">Buying an Ember opens the Augment page</div>
+  <div id="wares" style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px;"></div>
+</div>
+
+<button style="width:100%; font-size:13px; padding:9px; background:transparent; border:1px solid rgba(201,184,158,0.3); color:#c9b89e; border-radius:8px; cursor:pointer;">Leave</button>
+</div>
+
+<script>
+const COLOR_HEX = { Crimson:'#d9634a', Onyx:'#8f8f96', Verdant:'#5fae6e', Azure:'#5b9bd5' };
+
+const waresEl = document.getElementById('wares');
+const emberColors = ['Onyx','Crimson','Verdant'];
+emberColors.forEach(c => {
+  const hex = COLOR_HEX[c];
+  const el = document.createElement('div');
+  el.style.cssText = `background:rgba(15,11,8,0.6); border:1px solid ${hex}44; border-radius:8px; padding:10px; display:flex; flex-direction:column; align-items:center; gap:6px; text-align:center;`;
+  el.innerHTML = `
+    <div style="width:32px;height:32px;border-radius:50%;background:${hex}33;border:1.5px solid ${hex};"></div>
+    <div style="font-size:11px;color:#f0e4d4;">${c} Ember</div>
+    <button data-buy="ember-${c}" style="font-size:10px; padding:4px 8px; background:transparent; border:1px solid ${hex}; color:${hex}; border-radius:5px; cursor:pointer;">25 Wisp</button>
+  `;
+  waresEl.appendChild(el);
+});
+
+const artifactEl = document.createElement('div');
+artifactEl.style.cssText = 'background:rgba(15,11,8,0.6); border:1px solid rgba(201,184,158,0.3); border-radius:8px; padding:10px; display:flex; flex-direction:column; align-items:center; gap:6px; text-align:center;';
+artifactEl.innerHTML = `
+  <i class="ti ti-flame" style="font-size:26px;color:#e8a03a;" aria-hidden="true"></i>
+  <div style="font-size:11px;color:#f0e4d4;">Twin Flame</div>
+  <button data-buy="artifact" style="font-size:10px; padding:4px 8px; background:transparent; border:1px solid #e8a03a; color:#e8a03a; border-radius:5px; cursor:pointer;">140 Wisp</button>
+`;
+waresEl.appendChild(artifactEl);
+
+waresEl.addEventListener('click', e => {
+  const btn = e.target.closest('button[data-buy]');
+  if (btn) sendPrompt(`Buy ${btn.dataset.buy} from the Shop`);
+});
+</script>

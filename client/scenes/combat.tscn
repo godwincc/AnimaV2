@@ -147,6 +147,18 @@ size_flags_horizontal = 3
 autowrap_mode = 3
 text = ""
 
+[node name="ConfirmButton" type="Button" parent="CenterContainer/Card/Margin/Content/MessageBar/MessageMargin/MessageRow"]
+visible = false
+layout_mode = 2
+focus_mode = 0
+text = "Confirm"
+
+[node name="CancelButton" type="Button" parent="CenterContainer/Card/Margin/Content/MessageBar/MessageMargin/MessageRow"]
+visible = false
+layout_mode = 2
+focus_mode = 0
+text = "Cancel"
+
 [node name="HDivider3" type="HSeparator" parent="CenterContainer/Card/Margin/Content"]
 layout_mode = 2
 
@@ -243,3 +255,12 @@ alignment = 1
 layout_mode = 2
 focus_mode = 0
 text = "Back to Map (DEV)"
+
+[node name="MatchResultOverlay" type="Control" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2

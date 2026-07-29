@@ -1,0 +1,115 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/login.gd" id="1"]
+
+[node name="LoginScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Card" type="PanelContainer" parent="CenterContainer"]
+custom_minimum_size = Vector2(440, 0)
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="CenterContainer/Card"]
+layout_mode = 2
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 32
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 32
+
+[node name="Content" type="VBoxContainer" parent="CenterContainer/Card/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="TitleLabel" type="Label" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+horizontal_alignment = 1
+text = "ANIMA"
+
+[node name="SubtitleLabel" type="Label" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+horizontal_alignment = 1
+text = "Enter the Sanctuary"
+
+[node name="TabRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="LoginTabButton" type="Button" parent="CenterContainer/Card/Margin/Content/TabRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+toggle_mode = true
+button_pressed = true
+text = "Login"
+
+[node name="RegisterTabButton" type="Button" parent="CenterContainer/Card/Margin/Content/TabRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+toggle_mode = true
+text = "Create Account"
+
+[node name="LoginFields" type="VBoxContainer" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="LoginUsernameEdit" type="LineEdit" parent="CenterContainer/Card/Margin/Content/LoginFields"]
+layout_mode = 2
+placeholder_text = "Username"
+
+[node name="LoginPasswordEdit" type="LineEdit" parent="CenterContainer/Card/Margin/Content/LoginFields"]
+layout_mode = 2
+placeholder_text = "Password"
+secret = true
+
+[node name="RegisterFields" type="VBoxContainer" parent="CenterContainer/Card/Margin/Content"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="RegisterUsernameEdit" type="LineEdit" parent="CenterContainer/Card/Margin/Content/RegisterFields"]
+layout_mode = 2
+placeholder_text = "Username"
+
+[node name="RegisterEmailEdit" type="LineEdit" parent="CenterContainer/Card/Margin/Content/RegisterFields"]
+layout_mode = 2
+placeholder_text = "Email"
+
+[node name="RegisterPasswordEdit" type="LineEdit" parent="CenterContainer/Card/Margin/Content/RegisterFields"]
+layout_mode = 2
+placeholder_text = "Password"
+secret = true
+
+[node name="ErrorLabel" type="Label" parent="CenterContainer/Card/Margin/Content"]
+visible = false
+layout_mode = 2
+autowrap_mode = 3
+horizontal_alignment = 1
+text = ""
+
+[node name="SubmitButton" type="Button" parent="CenterContainer/Card/Margin/Content"]
+layout_mode = 2
+text = "Log In"

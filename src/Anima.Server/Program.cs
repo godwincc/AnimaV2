@@ -34,6 +34,7 @@ builder.Services.AddScoped<PendingWeaveRepository>();
 builder.Services.AddScoped<PendingPurchasedEmberRepository>();
 builder.Services.AddScoped<PendingBossHatchRepository>();
 builder.Services.AddScoped<DelveHistoryRepository>();
+builder.Services.AddScoped<PendingStarterRevealRepository>();
 builder.Services.AddSingleton<PlayerSessionRegistry>();
 
 builder.Services.AddSignalR();
@@ -106,6 +107,46 @@ builder.Services.AddAuthorization();
 var app = builder.Build();
 
 app.UseCors(DevClientCorsPolicy);
+
+// Godot Web's HTTPRequest node (client/scripts/api_client.gd -- the only client-side caller of
+// any REST endpoint, used solely for the two Auth calls below) fails the request outright against
+// a chunked-encoding response with no Content-Length, even though a plain browser fetch() against
+// the exact same response succeeds (confirmed directly: a fetch() run from the exported Web
+// build's own page context got a clean 200, while the same request through Godot's HTTPRequest
+// reported a connection-level failure). Kestrel defaults to chunked transfer encoding here because
+// MVC's JSON output formatter writes straight to the response stream without knowing the total
+// body length up front. Scoped to just these two paths -- buffers the response so a real
+// Content-Length can be set instead of a global response-buffering change touching every endpoint.
+var contentLengthBufferedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "/api/auth/login",
+    "/api/auth/register",
+};
+app.Use(async (context, next) =>
+{
+    if (!contentLengthBufferedPaths.Contains(context.Request.Path.Value ?? string.Empty))
+    {
+        await next();
+        return;
+    }
+
+    var originalBody = context.Response.Body;
+    using var buffered = new MemoryStream();
+    context.Response.Body = buffered;
+    try
+    {
+        await next();
+    }
+    finally
+    {
+        context.Response.Body = originalBody;
+    }
+
+    context.Response.ContentLength = buffered.Length;
+    buffered.Seek(0, SeekOrigin.Begin);
+    await buffered.CopyToAsync(originalBody);
+});
+
 app.UseAuthentication();
 app.UseAuthorization();
 

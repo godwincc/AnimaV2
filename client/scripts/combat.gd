@@ -20,17 +20,19 @@ extends Control
 ##   [CombatantSummary], EnemyTeam [CombatantSummary], Hand [HandCardSummary], DrawPileCount,
 ##   DiscardPileCount, TurnOrder [CombatTurnEntry], TurnIndex, CurrentActorAnimaId, Outcome,
 ##   EventLog [string], VictoryReward?, BossHatchPreview?, DefeatSummary?).
-## - CombatantSummary(Side, Index, Name, CurrentHp, MaxHp, Position, Alive, Statuses[keyword string]).
-##   NO AnimaId field on this shape (confirmed) -- see PLAYER-SIDE SPRITE MAPPING below for the real
-##   gap this creates and how this pass works around it.
-## - HandCardSummary(HandIndex, OwnerAnimaId, SkillName, Category, Color, EnergyCost, TargetType).
-##   NO description/effect-text field -- confirmed by reading GameHubModels.cs: unlike
-##   AnimaPartSummary/ReforgeSkillOption (both of which carry a server-synthesized
-##   BuildSkillDescription string), HandCardSummary was never given the same treatment. This pass
-##   substitutes a plain "<Category> · <EnergyCost> Energy" caption from the fields that ARE present,
-##   clearly a lesser substitute for real effect text -- flagged here for Phase 2 (add a Description
-##   field to HandCardSummary, reusing the existing BuildSkillDescription helper, same as every other
-##   skill-bearing DTO already does).
+## - CombatantSummary(Side, Index, Name, CurrentHp, MaxHp, Position, Alive, Statuses[keyword string],
+##   Shield[int]). NO AnimaId field on this shape (confirmed) -- see PLAYER-SIDE SPRITE MAPPING below
+##   for the real gap this creates and how this pass works around it (still open as of Phase 4 --
+##   confirmed irrelevant to targeting, which uses Side/Index instead). Shield is a Phase 4 addition
+##   (GameHubModels.cs/GameHub.cs) -- Statuses stayed keyword-only for every OTHER status, Shield got
+##   its own numeric field specifically because the hit-feedback diff needs to detect "Shield rose",
+##   not just "the Shield keyword is present."
+## - HandCardSummary(HandIndex, OwnerAnimaId, SkillName, Category, Color, EnergyCost, TargetType,
+##   Description). Description (NEW, Combat Phase 5) closed the TODO #23(b) gap -- server now
+##   synthesizes it via the same BuildSkillDescription helper AnimaPartSummary/ReforgeSkillOption
+##   already use. The old "<Category> · <EnergyCost> Energy" placeholder caption is gone; hovering a
+##   hand card now shows the real description in the docked message area (see the PHASE 5 comment
+##   near _build_hand_card below for the hover-revert mechanism).
 ##
 ## PLAYER-SIDE SPRITE MAPPING (real wire-shape gap, worked around not silently ignored):
 ## CombatantSummary has no AnimaId, so there is no direct, guaranteed-correct way to map a Player-side
@@ -53,35 +55,74 @@ extends Control
 ## entry falls back to a plain darkened tile (same "graceful fallback" spirit as HYBRID_FALLBACK_TINTS
 ## already uses for Vulcan/Mirage on the player side), not a hard error.
 ##
-## OUT OF SCOPE THIS PASS (still Phase 3+): real card targeting (GetLegalTargets, the Confirm/Cancel
-## flow, actually calling SubmitAction with a real HandIndex+Target), hit-feedback animations, hover
-## tooltips on the message area, live combat-log streaming beyond whatever StartCombat's own initial
-## response already carries, Enrage status-icon logic (statuses render as plain text chips for now,
-## no per-keyword icon mapping).
-##
 ## PHASE 2 additions (turn-gated hand, card ownership, Pass wiring): see the "PHASE 2" comment block
 ## right above _render_hand/_build_hand_card below for the full detail. Short version: hand cards now
 ## show which Anima they belong to (HandCardSummary.OwnerAnimaId, matched against the team roster --
 ## this field ALREADY existed on the wire, confirmed by re-reading GameHubModels.cs, so no server
 ## change was needed here, unlike the Description-field gap which still stands), only the current
 ## turn's Anima has clickable-ready cards (two distinct dim treatments: "not your turn" vs "not
-## enough Energy"), and the Pass button is now real (calls SubmitAction with HandIndex=null) --
-## added specifically so turn advancement could be verified live for this pass's own testing needs,
-## not part of the original 3-item ask on its own, but a direct, minimal prerequisite for it.
-## Actually PLAYING a card (real targeting + SubmitAction with a real HandIndex) is still not wired --
-## an eligible card's click handler just surfaces a message-area placeholder, honestly labeled as
-## such, rather than pretending a targeting flow exists.
+## enough Energy"), and the Pass button is now real (calls SubmitAction with HandIndex=null).
+##
+## PHASE 3 (real targeting, Confirm/Cancel, real card play) -- audit findings first, then what was
+## built, per CLAUDE.md's "Combat Screen -- Phase 3" section (full detail there):
+## - SubmitActionRequest.Target is a CombatantRef(Side, Index) -- the EXACT SAME identity scheme
+##   CombatantSummary already carries (Side/Index fields), confirmed by reading GameHubModels.cs'
+##   own comment on CombatantRef. So targeting needs NO AnimaId at all -- the long-open "CombatantSummary
+##   has no AnimaId" gap (still open, see top-of-file PLAYER-SIDE SPRITE MAPPING comment) turned out to
+##   be irrelevant to targeting; it only ever mattered for arena sprite-color lookup, a separate concern.
+## - HandCardSummary.TargetType (already on the wire, confirmed) is the real skill's raw TargetType enum
+##   name as a string ("SelfTarget", "Enemy", "LowestHpEnemy", "Ally", "LowestHpAlly", "ChosenEnemy",
+##   "ChosenAny", "AllEnemies", "AllAllies") -- so target-type IS directly exposed per card; no need to
+##   infer it by calling GetLegalTargets first and reasoning about the result shape.
+## - GetLegalTargets(handIndex) (confirmed via CombatEngine.GetLegalTargets, read directly, not
+##   assumed): SelfTarget returns exactly [actor's own CombatantRef] (NOT empty); AllEnemies/AllAllies
+##   return [] (genuinely empty, no explicit target possible); every other TargetType returns a REAL
+##   list of legal targets -- even when it algorithmically resolves to a single option (e.g. Enemy/
+##   LowestHpEnemy against one living enemy), it's still returned as a one-element list specifically so
+##   the client's highlight-then-click flow works uniformly. So "skip straight to Confirm" is ONLY
+##   correct for TargetType == "SelfTarget" (checked via the wire field directly, not by comparing list
+##   length) and for the genuinely-empty AoE case -- every other case, including an incidentally-single-
+##   option list, goes through the real highlight-and-click step, per CombatEngine's own comment.
+## - REAL DISCREPANCY FOUND, worked around correctly: SubmitActionRequest's own doc comment claims
+##   "Target ... null if that set came back empty (SelfTarget/AllAllies/AllEnemies skills need no
+##   explicit target)" -- but SubmitAction's actual validation (`legalTargets.Count > 0 && (explicitTarget
+##   == null || !legalTargets.Contains(explicitTarget))`) means a SelfTarget skill's non-empty
+##   [actor]-only list DOES require an explicit, non-null Target matching the actor, contradicting that
+##   comment. This client always sends the resolved CombatantRef explicitly for SelfTarget (never null),
+##   and only sends null when GetLegalTargets genuinely returned an empty list (true AoE).
+## Implementation: clicking an eligible hand card calls GetLegalTargets, then either jumps straight to
+## a Confirm prompt (SelfTarget/AoE) or enters a CHOOSING_TARGET phase that outlines only the legal
+## arena cards (amber border, not a full recolor) and disables everything else. Clicking a highlighted
+## target (or having skipped straight there) shows "Play [skill][ on [target]]? Confirm / Cancel" in the
+## message area (Cancel is also shown during target-choosing, as a deliberate small escape-hatch beyond
+## the literal ask, so a misclick can't strand the player -- see CLAUDE.md). Confirm calls SubmitAction
+## with the real HandIndex/Target and re-renders the whole screen from the returned CombatStatus, same
+## re-render path Pass already uses. No hit-feedback animation yet (Phase 4).
+##
+## PHASE 5 (Match Result: Victory/Defeat, real win/loss flow) -- see match_result.gd's own
+## top-of-file comment for the full shared-component contract (one component, gated by mode, reused
+## by BOTH this screen's Victory/Defeat and delve.gd's Retreat). _check_for_match_result() (called
+## after every SubmitAction/Pass response) detects the exact response that first reaches a terminal
+## CombatStatus.Outcome and opens it as a child overlay (MatchResultOverlay), same child-panel
+## pattern this codebase already uses everywhere else (AugmentOverlay, NodeEncounterOverlay). Two
+## exit signals distinguish where the CALLER (delve.gd) should end up: `continue_to_map` (Combat/
+## Elite Victory -- node already cleared server-side, just refresh and stay on the map) vs.
+## `delve_ended` (Boss Victory once its Delve Complete summary is dismissed, or a Defeat -- the
+## Delve itself already ended server-side, so delve.gd navigates to hub.tscn instead).
 ##
 ## DEV-ONLY "Back to Map" button (bottom of screen, NOT part of the locked Combat Screen Design):
-## this screen has no real way to leave Combat yet -- that's Phase 2's Victory/Defeat/Anima-Reveal
-## flow (CLAUDE.md's Match Result & Retreat System), not built here. Without a temporary escape
-## hatch, a tester could open this screen and have no way back to the map at all. Pressing it only
-## tears down THIS client-side panel (emits `resolved`, same signal convention every other node
-## screen uses) -- it does NOT call any server RPC, so the real ActiveCombat state is untouched
-## server-side (GetCombatState's own resume support already covers reconnecting into it later).
-## Strip this button out once Phase 2's real win/loss flow ships.
+## still needed for a mid-fight escape hatch (Phase 5 only handles the fight's real conclusion, not
+## backing out of an IN-PROGRESS one) -- pressing it only tears down THIS client-side panel (emits
+## `resolved`, same signal convention every other node screen uses) without any server RPC, so the
+## real ActiveCombat state is untouched server-side (GetCombatState's own resume support already
+## covers reconnecting into it later). Keep until a real "concede/flee mid-combat" design exists.
 
 signal resolved
+## PHASE 5: fires instead of `resolved` when the match-result flow ends with "Return to Hub"
+## (Boss Victory's Delve Complete summary, or a Defeat) -- the Delve itself has ended server-side
+## (Session.ActiveDelveRun cleared, see SubmitAction's own comment), so delve.gd navigates to
+## hub.tscn rather than just tearing down this panel and staying on the map.
+signal delve_ended
 
 # Warm sanctuary/workshop theme (Normal tier), identical top/mid/bottom stops to every other real
 # screen. Elite/Boss tiers below are CLAUDE.md's own locked room-background palettes -- this is the
@@ -94,6 +135,14 @@ const NORMAL_ARENA_INSET := Color(0, 0, 0, 0.42)
 const ELITE_ARENA_INSET := Color(0.078, 0, 0.039, 0.48)
 const BOSS_ARENA_INSET := Color(0, 0, 0, 0.6)
 const BOSS_VIGNETTE_COLOR := Color(0.545, 0, 0, 0.35)
+
+# PHASE 4: hit-feedback flash/rising-number colors, per the locked design (red=damage, green=heal,
+# silver-blue=shield). Shield's silver-blue has no existing shared constant elsewhere in this file
+# (COLOR_HP_GREEN/COLOR_HP_RED are reused directly for heal/damage instead of duplicating hex values).
+const HIT_FLASH_SHIELD := "7fb6d9"
+const HIT_NUMBER_RISE_PIXELS := 36.0
+const HIT_NUMBER_DURATION := 0.9
+const HIT_FLASH_DURATION := 0.35
 
 const COLOR_CARD_BG := "1e1610"
 const COLOR_CARD_BORDER := "c9b89e"
@@ -159,8 +208,10 @@ const SKILL_COLOR_TINTS := {
 }
 
 const ICON_GLYPH_SCRIPT := preload("res://scripts/icon_glyph.gd")
+const MATCH_RESULT_SCENE := preload("res://scenes/match_result.tscn")
 
 @onready var _background: TextureRect = $Background
+@onready var _match_result_overlay: Control = $MatchResultOverlay
 @onready var _card: PanelContainer = $CenterContainer/Card
 @onready var _status_label: Label = $CenterContainer/Card/Margin/Content/StatusLabel
 @onready var _round_label: Label = $CenterContainer/Card/Margin/Content/HudRow/RoundLabel
@@ -173,6 +224,8 @@ const ICON_GLYPH_SCRIPT := preload("res://scripts/icon_glyph.gd")
 @onready var _enemy_column: HBoxContainer = $CenterContainer/Card/Margin/Content/ArenaPanel/ArenaMargin/ArenaRow/EnemyColumn
 @onready var _message_icon: Control = $CenterContainer/Card/Margin/Content/MessageBar/MessageMargin/MessageRow/MessageIcon
 @onready var _message_label: Label = $CenterContainer/Card/Margin/Content/MessageBar/MessageMargin/MessageRow/MessageLabel
+@onready var _confirm_button: Button = $CenterContainer/Card/Margin/Content/MessageBar/MessageMargin/MessageRow/ConfirmButton
+@onready var _cancel_button: Button = $CenterContainer/Card/Margin/Content/MessageBar/MessageMargin/MessageRow/CancelButton
 @onready var _turn_queue_list: VBoxContainer = $CenterContainer/Card/Margin/Content/LowerRow/TurnQueuePanel/TurnQueueMargin/TurnQueueContent/TurnQueueList
 @onready var _energy_label: Label = $CenterContainer/Card/Margin/Content/LowerRow/RightColumn/StatusRow/EnergyLabel
 @onready var _energy_pips_row: HBoxContainer = $CenterContainer/Card/Margin/Content/LowerRow/RightColumn/StatusRow/EnergyPipsRow
@@ -191,11 +244,36 @@ var _wisp_balance: int = 0
 var _artifacts: Array = []
 var _busy: bool = false
 
+# ---- PHASE 3: targeting/confirm state machine ----
+# PHASE_NONE: no action in progress, hand/Pass behave as Phase 2 already had them.
+# PHASE_CHOOSING_TARGET: GetLegalTargets came back with a real (non-self, non-empty) choice --
+# arena highlights the legal set, everything else (other hand cards, Pass) is inert.
+# PHASE_CONFIRMING: either skipped straight here (SelfTarget/AoE) or a legal target was clicked --
+# message area shows the real Confirm/Cancel prompt.
+const PHASE_NONE := 0
+const PHASE_CHOOSING_TARGET := 1
+const PHASE_CONFIRMING := 2
+
+var _phase: int = PHASE_NONE
+var _phase_hand_index: int = -1
+var _phase_anima_id: String = ""
+var _phase_skill_name: String = ""
+var _phase_target_type: String = ""
+var _phase_legal_targets: Array = [] # Array of {"side":String,"index":int} from GetLegalTargets
+var _phase_chosen_target: Dictionary = {} # {} = implicit null target (true AoE); else {"side":,"index":}
+
+# PHASE 4: {"Side:Index": Control (the combatant's portrait_wrap)}, rebuilt every _render_arena()
+# call -- lets hit-feedback find the right portrait to flash/float a number over, keyed the same
+# Side/Index way targeting already does (see Phase 3's own audit: no AnimaId needed for this either).
+var _arena_portrait_by_ref: Dictionary = {}
+
 
 func _ready() -> void:
 	_apply_static_theme()
 	_dev_back_button.pressed.connect(_on_dev_back_pressed)
 	_pass_button.pressed.connect(_on_pass_pressed)
+	_confirm_button.pressed.connect(_on_confirm_pressed)
+	_cancel_button.pressed.connect(_on_cancel_pressed)
 
 
 ## Called by delve.gd right after instancing this scene. node_type is "Combat"/"Elite"/"Boss" --
@@ -240,14 +318,24 @@ func _load() -> void:
 
 
 func _render_all() -> void:
+	_reset_phase()
 	_render_hud()
 	_render_artifacts()
 	_render_arena()
-	_render_message()
+	_render_message_bar()
 	_render_turn_queue()
 	_render_status_row()
 	_render_hand()
 	_render_combat_log()
+
+
+## Re-renders just the parts affected by a targeting/confirm phase transition -- no new CombatStatus
+## involved (nothing server-side changed yet), so _status itself is untouched.
+func _refresh_interactive_ui() -> void:
+	_render_arena()
+	_render_hand()
+	_render_message_bar()
+	_render_status_row()
 
 
 # ---- HUD ----
@@ -280,6 +368,7 @@ func _render_arena() -> void:
 		child.free()
 	for child in _enemy_column.get_children():
 		child.free()
+	_arena_portrait_by_ref.clear()
 
 	var current_side := ""
 	var current_index := -1
@@ -294,18 +383,34 @@ func _render_arena() -> void:
 	player_team.sort_custom(func(a: Dictionary, b: Dictionary): return int(a.get("position", 0)) > int(b.get("position", 0)))
 	for summary: Variant in player_team:
 		if summary is Dictionary:
-			var is_current := current_side == "Player" and current_index == int(summary.get("index", -1))
-			_player_column.add_child(_build_combatant_card(summary, true, is_current))
+			var idx := int(summary.get("index", -1))
+			var is_current := current_side == "Player" and current_index == idx
+			var is_legal := _is_legal_target("Player", idx)
+			_player_column.add_child(_build_combatant_card(summary, true, is_current, is_legal))
 
 	var enemy_team: Array = (_status.get("enemyTeam", []) as Array).duplicate()
 	enemy_team.sort_custom(func(a: Dictionary, b: Dictionary): return int(a.get("position", 0)) < int(b.get("position", 0)))
 	for summary: Variant in enemy_team:
 		if summary is Dictionary:
-			var is_current := current_side == "Enemy" and current_index == int(summary.get("index", -1))
-			_enemy_column.add_child(_build_combatant_card(summary, false, is_current))
+			var idx := int(summary.get("index", -1))
+			var is_current := current_side == "Enemy" and current_index == idx
+			var is_legal := _is_legal_target("Enemy", idx)
+			_enemy_column.add_child(_build_combatant_card(summary, false, is_current, is_legal))
 
 
-func _build_combatant_card(summary: Dictionary, is_player_side: bool, is_current: bool) -> Control:
+## True only during PHASE_CHOOSING_TARGET, and only for entries actually present in the
+## GetLegalTargets result for the card currently being played -- see this function's callers for how
+## that renders as an amber outline (not a full recolor) on the arena.
+func _is_legal_target(side: String, index: int) -> bool:
+	if _phase != PHASE_CHOOSING_TARGET:
+		return false
+	for t: Variant in _phase_legal_targets:
+		if t is Dictionary and str(t.get("side", "")) == side and int(t.get("index", -1)) == index:
+			return true
+	return false
+
+
+func _build_combatant_card(summary: Dictionary, is_player_side: bool, is_current: bool, is_legal_target: bool = false) -> Control:
 	var card := VBoxContainer.new()
 	card.custom_minimum_size = Vector2(140, 0)
 	card.add_theme_constant_override("separation", 4)
@@ -319,6 +424,10 @@ func _build_combatant_card(summary: Dictionary, is_player_side: bool, is_current
 	portrait_wrap.custom_minimum_size = Vector2(84, 84)
 	portrait_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	card.add_child(portrait_wrap)
+
+	# PHASE 4: registered by Side:Index (same key scheme as targeting) so hit-feedback can find
+	# this exact portrait after a SubmitAction response re-renders the arena.
+	_arena_portrait_by_ref["%s:%d" % [str(summary.get("side", "")), int(summary.get("index", -1))]] = portrait_wrap
 
 	if alive:
 		var texture_path := _sprite_path_for(summary, is_player_side)
@@ -398,7 +507,119 @@ func _build_combatant_card(summary: Dictionary, is_player_side: bool, is_current
 	position_label.add_theme_font_size_override("font_size", UiTheme.SIZE_SMALL)
 	card.add_child(position_label)
 
-	return card
+	if not is_legal_target:
+		return card
+
+	# Legal-target outline -- a border wrap, NOT a full recolor (per the locked Combat Screen Design's
+	# own "outline ONLY the legal target set" language). Clickable: selecting this target moves the
+	# phase straight to Confirm.
+	var wrap := PanelContainer.new()
+	var wrap_style := StyleBoxFlat.new()
+	wrap_style.bg_color = Color(0, 0, 0, 0)
+	wrap_style.border_color = Color(COLOR_ACCENT_AMBER)
+	wrap_style.set_border_width_all(2)
+	wrap_style.set_corner_radius_all(8)
+	wrap_style.set_content_margin_all(4)
+	wrap.add_theme_stylebox_override("panel", wrap_style)
+	wrap.mouse_filter = Control.MOUSE_FILTER_STOP
+	wrap.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	wrap.gui_input.connect(_on_arena_card_gui_input.bind(str(summary.get("side", "")), int(summary.get("index", -1))))
+	wrap.add_child(card)
+	return wrap
+
+
+# ---- PHASE 4: hit-feedback (floating +/- numbers, portrait flash) ----
+#
+# Deliberately diff-based, NOT "animate whatever was clicked/targeted" -- reactive skills (Deflect,
+# Ward, Retribution, Vengeance, Intercept) can redirect damage, grant shields, or trigger counter-
+# effects the client never explicitly requested (confirmed real via Phase 3's own audit of
+# CombatEngine). Snapshotting every combatant's HP/Shield before SubmitAction and diffing the WHOLE
+# new CombatStatus against it afterward is the only way to show what actually happened, including
+# to combatants the player never targeted (e.g. Retribution bouncing damage back onto the original
+# attacker, or an AoE heal). Shield's numeric magnitude did not previously exist on the wire --
+# CombatantSummary.Statuses was keyword-only by design ("add magnitude if/when the client needs
+# it") -- so this pass added a single `Shield` int field to CombatantSummary/GameHub.cs rather than
+# a general per-status magnitude map, since Shield is the only status this feature needs the number
+# for.
+
+## Captures every combatant's current HP/Shield from the CURRENTLY-RENDERED _status, keyed the same
+## "Side:Index" way targeting/portrait-lookup already use. Called immediately before a SubmitAction
+## request goes out (both Pass and a real card play), so the diff after the response reflects
+## exactly what that one resolution changed -- not just on the acted-upon Anima, but both teams.
+func _snapshot_combatants() -> Dictionary:
+	var snapshot := {}
+	for side_key in ["playerTeam", "enemyTeam"]:
+		for entry: Variant in _status.get(side_key, []):
+			if entry is Dictionary:
+				var key := "%s:%d" % [str(entry.get("side", "")), int(entry.get("index", -1))]
+				snapshot[key] = {"hp": int(entry.get("currentHp", 0)), "shield": int(entry.get("shield", 0))}
+	return snapshot
+
+
+## Diffs the just-rendered _status (post SubmitAction, already re-rendered via _render_all by the
+## time this is called) against a snapshot taken before that same SubmitAction call, and spawns
+## feedback for every combatant that actually changed -- both teams, not just the acting side.
+## Shield increase takes priority over an HP change on the SAME combatant in the SAME resolution
+## (per the locked design) since Guard Strike/Deflect-style self-shields commonly ride alongside a
+## Shield gain being the more "interesting" of the two to surface.
+##
+## REAL BUG FOUND AND FIXED, confirmed live: _render_all() (called by the caller just before this)
+## frees and rebuilds every arena portrait from scratch every time. Reading a freshly-created
+## Control's global_position in the SAME frame it was added returns a stale/unlaid-out value --
+## Godot's Container layout pass runs during the engine's own process step, not synchronously inside
+## add_child(). Confirmed live: a floating number spawned near the arena's top-left origin instead
+## of over the actually-changed combatant's real portrait. Same "await one frame so layout settles"
+## idiom already used elsewhere in this codebase (delve.gd/hub.gd/sanctum.gd/etc.) fixes it -- await
+## get_tree().process_frame before reading any portrait's global_position.
+func _play_hit_feedback(before: Dictionary) -> void:
+	await get_tree().process_frame
+
+	for side_key in ["playerTeam", "enemyTeam"]:
+		for entry: Variant in _status.get(side_key, []):
+			if not (entry is Dictionary): continue
+			var key := "%s:%d" % [str(entry.get("side", "")), int(entry.get("index", -1))]
+			if not before.has(key): continue # newly-appeared combatant (e.g. Summon) -- nothing to diff against
+
+			var prev: Dictionary = before[key]
+			var hp_delta := int(entry.get("currentHp", 0)) - int(prev.get("hp", 0))
+			var shield_delta := int(entry.get("shield", 0)) - int(prev.get("shield", 0))
+
+			if shield_delta > 0:
+				_spawn_hit_feedback(key, "+%d" % shield_delta, Color(HIT_FLASH_SHIELD))
+			elif hp_delta > 0:
+				_spawn_hit_feedback(key, "+%d" % hp_delta, Color(COLOR_HP_GREEN))
+			elif hp_delta < 0:
+				_spawn_hit_feedback(key, "%d" % hp_delta, Color(COLOR_HP_RED))
+
+
+## Spawns one rising/fading number + a brief portrait flash over the given combatant's portrait.
+## The number is a `top_level` Control (bypasses its parent's layout/clipping entirely, positioned
+## via plain global coordinates) so it can float freely above the portrait's own
+## AspectRatioContainer without fighting that container's single-child layout assumptions.
+func _spawn_hit_feedback(ref_key: String, text: String, color: Color) -> void:
+	var portrait: Control = _arena_portrait_by_ref.get(ref_key)
+	if portrait == null: return # dead/removed combatant with nothing rendered to anchor onto
+
+	var flash_tween := create_tween()
+	portrait.modulate = color
+	flash_tween.tween_property(portrait, "modulate", Color(1, 1, 1, 1), HIT_FLASH_DURATION)
+
+	var label := Label.new()
+	label.text = text
+	label.add_theme_color_override("font_color", color)
+	label.add_theme_font_size_override("font_size", UiTheme.SIZE_SUBHEADER)
+	label.top_level = true
+	label.z_index = 10
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(label)
+	label.global_position = portrait.global_position + Vector2(portrait.size.x * 0.5 - 10.0, -6.0)
+
+	var number_tween := create_tween()
+	number_tween.set_parallel(true)
+	number_tween.tween_property(label, "position:y", label.position.y - HIT_NUMBER_RISE_PIXELS, HIT_NUMBER_DURATION)
+	number_tween.tween_property(label, "modulate:a", 0.0, HIT_NUMBER_DURATION)
+	number_tween.set_parallel(false)
+	number_tween.tween_callback(label.queue_free)
 
 
 func _hp_bar_color(ratio: float) -> String:
@@ -424,7 +645,29 @@ func _fallback_tint_for(summary: Dictionary, is_player_side: bool) -> String:
 
 # ---- Message area ----
 
-func _render_message() -> void:
+## PHASE 3: the message bar now also carries the targeting/confirm prompt and the Confirm/Cancel
+## buttons, gated by _phase. PHASE_NONE keeps the exact Phase 1/2 idle behavior (_render_idle_message).
+func _render_message_bar() -> void:
+	match _phase:
+		PHASE_CHOOSING_TARGET:
+			_message_label.text = "Choose a target for %s." % _phase_skill_name
+			_confirm_button.visible = false
+			_confirm_button.disabled = false
+			_cancel_button.visible = true
+			_cancel_button.disabled = false
+		PHASE_CONFIRMING:
+			_message_label.text = "Play %s%s? " % [_phase_skill_name, _confirm_target_clause()]
+			_confirm_button.visible = true
+			_confirm_button.disabled = false
+			_cancel_button.visible = true
+			_cancel_button.disabled = false
+		_:
+			_confirm_button.visible = false
+			_cancel_button.visible = false
+			_render_idle_message()
+
+
+func _render_idle_message() -> void:
 	var outcome := str(_status.get("outcome", "InProgress"))
 	if outcome != "InProgress":
 		_message_label.text = "Combat has ended (%s)." % outcome
@@ -432,7 +675,6 @@ func _render_message() -> void:
 
 	var current_actor_id: Variant = _status.get("currentActorAnimaId")
 	if current_actor_id != null:
-		var player_team: Array = _status.get("playerTeam", [])
 		var turn_order: Array = _status.get("turnOrder", [])
 		var turn_index := int(_status.get("turnIndex", -1))
 		var actor_name := ""
@@ -441,6 +683,27 @@ func _render_message() -> void:
 		_message_label.text = "Round %d -- %s's turn." % [int(_status.get("roundNumber", 1)), actor_name] if actor_name != "" else "Round %d in progress." % int(_status.get("roundNumber", 1))
 	else:
 		_message_label.text = "Round %d -- the enemy is acting." % int(_status.get("roundNumber", 1))
+
+
+## Confirm prompt's "on [target]" clause. Empty _phase_chosen_target means a true AoE skill
+## (AllEnemies/AllAllies -- GetLegalTargets genuinely returned []), which has no single target to name.
+func _confirm_target_clause() -> String:
+	if _phase_chosen_target.is_empty():
+		match _phase_target_type:
+			"AllEnemies": return " on all enemies"
+			"AllAllies": return " on your whole team"
+			_: return ""
+	var side := str(_phase_chosen_target.get("side", ""))
+	var index := int(_phase_chosen_target.get("index", -1))
+	var target_name := _summary_name_for(side, index)
+	return " on %s" % target_name if target_name != "" else ""
+
+
+func _summary_name_for(side: String, index: int) -> String:
+	var list: Array = _status.get("playerTeam", []) if side == "Player" else _status.get("enemyTeam", [])
+	if index >= 0 and index < list.size() and list[index] is Dictionary:
+		return str((list[index] as Dictionary).get("name", ""))
+	return ""
 
 
 # ---- Turn order queue ----
@@ -502,19 +765,18 @@ func _render_status_row() -> void:
 	_deck_discard_label.text = "Deck %d / Discard %d" % [draw_count, discard_count]
 
 	# Real (Phase 2, see top-of-file comment) -- only enabled while it's actually a player Anima's
-	# turn (CurrentActorAnimaId non-null) and no request is already in flight.
+	# turn (CurrentActorAnimaId non-null), no request is already in flight, and no targeting/confirm
+	# action is already mid-flow (PHASE 3 -- Pass mid-action would be a nonsensical double-decision).
 	var current_actor_id: Variant = _status.get("currentActorAnimaId")
 	var outcome := str(_status.get("outcome", "InProgress"))
-	_pass_button.disabled = _busy or current_actor_id == null or outcome != "InProgress"
+	_pass_button.disabled = _busy or current_actor_id == null or outcome != "InProgress" or _phase != PHASE_NONE
 
 
 ## Passes the current player Anima's turn for real -- SubmitAction with HandIndex/Target both null,
-## per SubmitActionRequest's own documented "HandIndex null = Pass" convention. Added specifically so
-## this pass's own turn-gating verification (does the RIGHT Anima's hand light up as turns advance)
-## has a real way to advance turns at all -- Phase 1 left Pass permanently disabled since nothing
-## could exercise it yet. Still deliberately NOT real card play: an eligible hand card's click handler
-## (see _on_hand_card_gui_input below) only surfaces a placeholder message, never calls SubmitAction
-## with a real HandIndex/Target -- that's real targeting, still Phase 3+.
+## per SubmitActionRequest's own documented "HandIndex null = Pass" convention. Added (Phase 2) so
+## turn-gating verification (does the RIGHT Anima's hand light up as turns advance) had a real way to
+## advance turns at all -- Phase 1 left Pass permanently disabled since nothing could exercise it yet.
+## Real card play (see _on_hand_card_gui_input/_begin_targeting below) is now wired too, as of Phase 3.
 func _on_pass_pressed() -> void:
 	if _busy: return
 	var current_actor_id: Variant = _status.get("currentActorAnimaId")
@@ -523,6 +785,7 @@ func _on_pass_pressed() -> void:
 	_busy = true
 	_pass_button.disabled = true
 
+	var before := _snapshot_combatants()
 	var result: Variant = await _hub.invoke("SubmitAction", [{"animaId": current_actor_id, "handIndex": null, "target": null}])
 
 	_busy = false
@@ -533,6 +796,8 @@ func _on_pass_pressed() -> void:
 
 	_status = result
 	_render_all()
+	_play_hit_feedback(before)
+	_check_for_match_result()
 
 
 # ---- Hand ----
@@ -562,10 +827,9 @@ func _render_hand() -> void:
 ## (impossible today since only the current actor's Energy is checked, but defensively) the turn-gate
 ## treatment wins, since "not your turn" is the more fundamental reason it can't be played.
 ##
-## Only a fully-eligible (current Anima's + affordable) card gets a real click handler -- and even
-## then, it does NOT call SubmitAction with a real HandIndex/Target (that's real targeting, still
-## Phase 3+, see top-of-file comment): clicking just surfaces an honest placeholder in the message
-## area rather than silently doing nothing OR pretending to submit an action that isn't implemented.
+## Only a fully-eligible (current Anima's + affordable, and no other action already mid-flow) card
+## gets a real click handler -- as of Phase 3, that handler is real: see _begin_targeting below for
+## the GetLegalTargets -> highlight/skip -> Confirm flow.
 func _build_hand_card(card_data: Dictionary) -> Control:
 	var color: String = str(card_data.get("color", ""))
 	var tint: String = SKILL_COLOR_TINTS.get(color, "555555")
@@ -579,13 +843,29 @@ func _build_hand_card(card_data: Dictionary) -> Control:
 	var is_owner_turn := current_actor_id != null and str(current_actor_id) == owner_id
 	var energy_cost := int(card_data.get("energyCost", 0))
 	var affordable := energy_cost <= int(_status.get("sharedEnergy", 0))
-	var is_eligible := is_owner_turn and affordable
+	var hand_index := int(card_data.get("handIndex", -1))
+	var phase_active := _phase != PHASE_NONE
+	var is_selected_card := phase_active and hand_index == _phase_hand_index
+	var is_eligible := is_owner_turn and affordable and not phase_active and not _busy
 
 	var card := _make_static_panel()
 	card.custom_minimum_size = Vector2(108, 0)
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
 
-	if not is_owner_turn:
+	# PHASE 3: the card currently mid-targeting/confirm gets its own highlighted border (same
+	# amber-outline convention the arena's legal-target cards use) instead of the ordinary dim
+	# treatments below, so it reads as "this is the one in progress," not "unavailable."
+	if is_selected_card:
+		var selected_style := StyleBoxFlat.new()
+		selected_style.bg_color = Color(Color(COLOR_CARD_BG), 0.75)
+		selected_style.border_color = Color(COLOR_ACCENT_AMBER)
+		selected_style.set_border_width_all(2)
+		selected_style.set_corner_radius_all(8)
+		selected_style.set_content_margin_all(8)
+		card.add_theme_stylebox_override("panel", selected_style)
+	elif phase_active:
+		card.modulate = Color(1, 1, 1, 0.5)
+	elif not is_owner_turn:
 		card.modulate = Color(1, 1, 1, 0.4)
 	elif not affordable:
 		card.modulate = Color(1, 1, 1, 0.55)
@@ -609,6 +889,7 @@ func _build_hand_card(card_data: Dictionary) -> Control:
 	content.add_child(owner_row)
 
 	var owner_swatch := PanelContainer.new()
+	owner_swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	owner_swatch.custom_minimum_size = Vector2(10, 10)
 	var owner_swatch_style := StyleBoxFlat.new()
 	owner_swatch_style.bg_color = Color(SKILL_COLOR_TINTS.get(owner_color, "888888"))
@@ -630,6 +911,7 @@ func _build_hand_card(card_data: Dictionary) -> Control:
 	content.add_child(pip_row)
 
 	var pip := PanelContainer.new()
+	pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	pip.custom_minimum_size = Vector2(22, 22)
 	var pip_style := StyleBoxFlat.new()
 	pip_style.bg_color = Color(tint)
@@ -647,26 +929,48 @@ func _build_hand_card(card_data: Dictionary) -> Control:
 
 	# Placeholder art block -- no real per-skill card art exists yet (deferred alongside creature
 	# portraits, per CLAUDE.md's own art-direction note); a flat color-tinted block stands in.
+	# REAL BUG FOUND AND FIXED (Phase 5 live verification): this ColorRect had no explicit
+	# mouse_filter, so it inherited Control's own default of MOUSE_FILTER_STOP -- since it's the
+	# single largest visual region of the card (48px tall, full width), it silently swallowed
+	# every click that landed on it, before the event could ever reach `card`'s own gui_input
+	# handler below. Confirmed live: clicking the art block never fired GetLegalTargets; clicking
+	# the skill-name text just below it (Label's own default IS MOUSE_FILTER_IGNORE) did. Same fix
+	# applied to `pip`/`owner_swatch` above (both PanelContainers, same STOP-by-default issue, same
+	# "biggest non-interactive shape swallows the click" risk, just smaller targets).
 	var art_block := ColorRect.new()
+	art_block.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	art_block.color = Color(tint, 0.5)
 	art_block.custom_minimum_size = Vector2(0, 48)
 	content.add_child(art_block)
 
 	var name_label := Label.new()
+	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	name_label.text = str(card_data.get("skillName", "?"))
 	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	name_label.add_theme_color_override("font_color", Color(COLOR_TEXT_CREAM))
 	name_label.add_theme_font_size_override("font_size", UiTheme.SIZE_SMALL)
 	content.add_child(name_label)
 
-	# Substitute mechanical caption, NOT real effect text -- see top-of-file comment: HandCardSummary
-	# carries no description field the way AnimaPartSummary/ReforgeSkillOption do.
+	# PHASE 5: real mechanical description, from the server's own BuildSkillDescription helper
+	# (HandCardSummary.Description, closes TODO #23(b) -- see top-of-file comment).
+	var description: String = str(card_data.get("description", ""))
 	var effect_label := Label.new()
-	effect_label.text = "%s · %d Energy" % [str(card_data.get("category", "")), int(card_data.get("energyCost", 0))]
+	effect_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	effect_label.text = description
 	effect_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	effect_label.add_theme_color_override("font_color", Color(COLOR_TEXT_MUTED))
 	effect_label.add_theme_font_size_override("font_size", UiTheme.SIZE_MICRO)
 	content.add_child(effect_label)
+
+	# PHASE 5: hover shows the full description in the docked message area (same pattern
+	# reforge_node.gd's skill-browse hover already established), reverting to whatever the message
+	# area was previously showing on mouse-leave -- _render_message_bar() already recomputes the
+	# correct idle/targeting/confirm text from current state, so "revert" is just "re-run it."
+	# Wired on the whole card (not gated on is_eligible) so a dimmed/unaffordable card's effect text
+	# is still discoverable on hover.
+	if description != "":
+		card.mouse_entered.connect(func(): _message_label.text = description)
+		card.mouse_exited.connect(func(): _render_message_bar())
 
 	# Red "X" overlay -- ONLY for the "not enough Energy, but IS this Anima's turn" state, per this
 	# function's own top comment on why the two dim states must read as visually distinct. Added as a
@@ -688,7 +992,214 @@ func _build_hand_card(card_data: Dictionary) -> Control:
 
 func _on_hand_card_gui_input(event: InputEvent, card_data: Dictionary) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_message_label.text = "Would play %s -- targeting/confirm not implemented yet (Phase 3)." % str(card_data.get("skillName", "?"))
+		_begin_targeting(card_data)
+
+
+## PHASE 3: real targeting entry point. Calls GetLegalTargets for this card, then either jumps
+## straight to Confirm (SelfTarget, or a true AoE with an empty legal-target list) or enters
+## PHASE_CHOOSING_TARGET so the arena can highlight the real legal set. See top-of-file comment for
+## the full audit trail behind these branches (esp. why "list has exactly 1 entry" is NOT the right
+## self-target check -- TargetType == "SelfTarget" is).
+func _begin_targeting(card_data: Dictionary) -> void:
+	if _busy or _phase != PHASE_NONE:
+		return
+	var current_actor_id: Variant = _status.get("currentActorAnimaId")
+	if current_actor_id == null:
+		return
+
+	var hand_index := int(card_data.get("handIndex", -1))
+
+	_busy = true
+	# Deferred, NOT called directly: this handler is running INSIDE the clicked card's own
+	# gui_input emission. _render_hand() frees and rebuilds every hand card, including the one
+	# currently emitting this very signal -- freeing it synchronously throws Godot's "Object is
+	# locked and can't be freed" (confirmed live: this crashed on every click before deferring,
+	# and silently corrupted later state -- e.g. a stale/duplicate card left in the tree caused a
+	# wrong target to be submitted on a later Confirm). call_deferred runs after this signal
+	# emission's call stack fully unwinds, once the node is no longer locked.
+	call_deferred("_render_hand")
+	call_deferred("_render_status_row")
+
+	var targets: Variant = await _hub.invoke("GetLegalTargets", [hand_index])
+
+	_busy = false
+
+	if not (targets is Array):
+		_message_label.text = "Could not check targets -- check your connection."
+		_render_hand()
+		_render_status_row()
+		return
+
+	_phase_hand_index = hand_index
+	_phase_anima_id = str(current_actor_id)
+	_phase_skill_name = str(card_data.get("skillName", "?"))
+	_phase_target_type = str(card_data.get("targetType", ""))
+	_phase_legal_targets = targets
+
+	if targets.is_empty():
+		# True AoE (AllEnemies/AllAllies) -- no explicit target exists to pick.
+		_phase_chosen_target = {}
+		_phase = PHASE_CONFIRMING
+	elif _phase_target_type == "SelfTarget":
+		# GetLegalTargets returns exactly [actor] here -- use it directly as the implicit target.
+		# Per this file's own audit note, this must still be SENT explicitly on Confirm, never null.
+		_phase_chosen_target = targets[0]
+		_phase = PHASE_CONFIRMING
+	else:
+		_phase = PHASE_CHOOSING_TARGET
+
+	_refresh_interactive_ui()
+
+
+## PHASE 3: clicking a highlighted (legal) arena target during PHASE_CHOOSING_TARGET moves straight
+## to the Confirm prompt. Bound at card-build time with this card's own (side, index) -- see
+## _build_combatant_card's legal-target wrap.
+func _on_arena_card_gui_input(event: InputEvent, side: String, index: int) -> void:
+	if _phase != PHASE_CHOOSING_TARGET:
+		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if not _is_legal_target(side, index):
+			return
+		_phase_chosen_target = {"side": side, "index": index}
+		_phase = PHASE_CONFIRMING
+		# Deferred, same reason as _begin_targeting's call above: this handler is running inside
+		# the clicked (legal-target-wrap) node's own gui_input emission, and _refresh_interactive_ui
+		# -> _render_arena frees and rebuilds every arena card, including this one.
+		call_deferred("_refresh_interactive_ui")
+
+
+## Cancel fully clears the in-progress targeting/confirm selection -- shown during BOTH
+## PHASE_CHOOSING_TARGET and PHASE_CONFIRMING (a small, deliberate addition beyond the locked design's
+## literal "Confirm/Cancel" wording, which only describes the confirm step -- without it, a player who
+## opened targeting on the wrong card would have no way back except finishing some other action).
+func _on_cancel_pressed() -> void:
+	if _busy:
+		return
+	_reset_phase()
+	_refresh_interactive_ui()
+
+
+## Confirm submits the real action: SubmitAction with the real HandIndex/Target, then re-renders the
+## whole screen from the returned CombatStatus -- same re-render path _on_pass_pressed already uses.
+## No hit-feedback animation yet (Phase 4).
+func _on_confirm_pressed() -> void:
+	if _busy or _phase != PHASE_CONFIRMING:
+		return
+
+	_busy = true
+	_confirm_button.disabled = true
+	_cancel_button.disabled = true
+
+	var target_payload: Variant = null
+	if not _phase_chosen_target.is_empty():
+		target_payload = {
+			"side": str(_phase_chosen_target.get("side", "")),
+			"index": int(_phase_chosen_target.get("index", -1)),
+		}
+
+	var request := {"animaId": _phase_anima_id, "handIndex": _phase_hand_index, "target": target_payload}
+	var before := _snapshot_combatants()
+	var result: Variant = await _hub.invoke("SubmitAction", [request])
+
+	_busy = false
+	_reset_phase()
+
+	if not (result is Dictionary):
+		_refresh_interactive_ui()
+		_message_label.text = "Could not submit action -- check your connection."
+		return
+
+	_status = result
+	_render_all()
+	_play_hit_feedback(before)
+	_check_for_match_result()
+
+
+func _reset_phase() -> void:
+	_phase = PHASE_NONE
+	_phase_hand_index = -1
+	_phase_anima_id = ""
+	_phase_skill_name = ""
+	_phase_target_type = ""
+	_phase_legal_targets = []
+	_phase_chosen_target = {}
+
+
+# ---- PHASE 5: Match Result (Victory/Defeat) -- see match_result.gd's own top-of-file comment for
+# the full shared-component contract. Called after every SubmitAction/Pass response re-render;
+# CombatStatus.Outcome is "InProgress" for every non-terminal response (StartCombat/GetCombatState/
+# GetLegalTargets never carry a terminal outcome at all, confirmed by reading GameHub.cs), so this
+# is a no-op except on the exact call that actually ends the fight.
+
+func _check_for_match_result() -> void:
+	var outcome := str(_status.get("outcome", "InProgress"))
+	if outcome == "InProgress":
+		return
+
+	var mode := ""
+	var params := {}
+
+	if outcome == "Victory":
+		var reward: Dictionary = _status.get("victoryReward", {})
+		if _node_type == "Boss":
+			mode = "victory_boss"
+			var boss_name := ""
+			var enemy_team: Array = _status.get("enemyTeam", [])
+			if enemy_team.size() > 0 and enemy_team[0] is Dictionary:
+				boss_name = str((enemy_team[0] as Dictionary).get("name", ""))
+			params = {
+				"wispGranted": int(reward.get("wispGranted", 0)),
+				"echoShardGranted": bool(reward.get("echoShardGranted", false)),
+				"pendingEmberColors": reward.get("pendingEmberColors", []),
+				"bossHatchPreview": _status.get("bossHatchPreview", {}),
+				"playerTeam": _status.get("playerTeam", []),
+				"bossName": boss_name,
+			}
+		else:
+			mode = "victory_elite" if _node_type == "Elite" else "victory_combat"
+			params = {
+				"wispGranted": int(reward.get("wispGranted", 0)),
+				"vesselShardGranted": bool(reward.get("vesselShardGranted", false)),
+				"pendingEmberColors": reward.get("pendingEmberColors", []),
+			}
+	elif outcome == "Defeat":
+		mode = "defeat"
+		params = _status.get("defeatSummary", {})
+	else:
+		return # defensive -- CombatOutcome is only ever InProgress/Victory/Defeat
+
+	_open_match_result(mode, params)
+
+
+func _open_match_result(mode: String, params: Dictionary) -> void:
+	for child in _match_result_overlay.get_children():
+		child.free()
+
+	var instance := MATCH_RESULT_SCENE.instantiate() as Control
+	_match_result_overlay.add_child(instance)
+	_match_result_overlay.visible = true
+	instance.connect("continue_to_map", _on_match_result_continue.bind(instance))
+	instance.connect("return_to_hub", _on_match_result_return_to_hub.bind(instance))
+	instance.call("start", _hub, mode, params)
+
+
+## Combat/Elite Victory only -- the node is already cleared server-side (SubmitAction's own
+## MarkCurrentNodeCleared, called before the reward grant), so closing this panel via the existing
+## `resolved` signal and letting delve.gd refresh the map/ledger is the correct, complete "return"
+## -- no separate signal needed for this case.
+func _on_match_result_continue(instance: Control) -> void:
+	_match_result_overlay.visible = false
+	instance.queue_free()
+	resolved.emit()
+
+
+## Boss Victory (once its Delve Complete summary is dismissed) / Defeat -- the Delve itself has
+## already ended server-side (Session.ActiveDelveRun cleared), so delve.gd needs to navigate away
+## from the map entirely rather than just refresh it.
+func _on_match_result_return_to_hub(instance: Control) -> void:
+	_match_result_overlay.visible = false
+	instance.queue_free()
+	delve_ended.emit()
 
 
 # ---- Combat log ----

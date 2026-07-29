@@ -1,8 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
+using Anima.Core.Weaving;
 using Anima.Server.Data;
 using Anima.Server.Data.Entities;
 using Anima.Server.Email;
+using Anima.Server.Persistence;
+using Anima.Server.Sessions;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -21,7 +24,11 @@ public record ResetPasswordResult(ResetPasswordOutcome Outcome);
 // a password-reset path keyed off email, and a long-lived login token. PasswordHasher<T> is reused
 // from Microsoft.Extensions.Identity.Core purely for its hashing algorithm (PBKDF2, correctly
 // salted/iterated) -- pulling in the rest of Identity's machinery for that alone isn't warranted.
-public class AuthService(AnimaDbContext db, PasswordHasher<AccountEntity> hasher, IEmailSender emailSender)
+public class AuthService(
+    AnimaDbContext db,
+    PasswordHasher<AccountEntity> hasher,
+    IEmailSender emailSender,
+    PendingStarterRevealRepository pendingStarterRevealRepo)
 {
     private static string Normalize(string username) => username.Trim().ToUpperInvariant();
 
@@ -44,6 +51,14 @@ public class AuthService(AnimaDbContext db, PasswordHasher<AccountEntity> hasher
 
         db.Accounts.Add(account);
         await db.SaveChangesAsync(ct);
+
+        // Real starter-trio seeding (NEW -- closes the confirmed gap where a fresh account got zero
+        // starter Anima). Rolled once, here, and persisted immediately as a PendingStarterReveal --
+        // same "granted in substance, not yet resolved" treatment PendingWeave/PendingBossHatch
+        // already get, so this can't be silently lost to a disconnect before the client ever opens
+        // its first hub connection to name them.
+        var rolls = StarterAnimaService.RollStarterTrio(Random.Shared);
+        await pendingStarterRevealRepo.SaveAsync(account.Id, new PendingStarterReveal { Rolls = rolls, NextUnnamedIndex = 0 }, ct);
 
         return new RegisterResult(RegisterOutcome.Ok, account);
     }

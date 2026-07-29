@@ -1,0 +1,164 @@
+<div style="background: radial-gradient(ellipse at 30% 20%, #4a3a2e 0%, #2b2018 45%, #1a130e 100%); border-radius: 12px; padding: 16px; font-family: -apple-system, sans-serif; color: #ede3d3;">
+<h2 class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;">Delve screen with team parts list on the left and a resources and artifacts sidebar on the right</h2>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+  <div style="font-size:13px; color:#c9bda8;">Floor 3 of 15</div>
+  <button style="font-size:11px; padding:5px 10px; background:transparent; border:0.5px solid rgba(224,110,90,0.5); color:#e06e5a; border-radius:6px; cursor:pointer;">Retreat</button>
+</div>
+
+<div style="background:rgba(0,0,0,0.28); border:0.5px solid rgba(237,227,211,0.12); border-radius:10px; padding:14px; margin-bottom:12px; overflow-x:auto;">
+<div style="position:relative; height:150px; width:680px;">
+<svg width="680" height="150" viewBox="0 0 680 150" style="position:absolute;top:0;left:0">
+<g stroke="#5a4c48" stroke-width="1" fill="none" opacity="0.5">
+<line x1="230" y1="70" x2="290" y2="90"/><line x1="290" y1="90" x2="340" y2="90"/>
+<line x1="340" y1="90" x2="390" y2="90"/><line x1="390" y1="90" x2="450" y2="70"/>
+<line x1="450" y1="70" x2="510" y2="90"/><line x1="510" y1="90" x2="560" y2="90"/>
+<line x1="560" y1="90" x2="610" y2="90"/>
+</g>
+<circle cx="230" cy="70" r="20" fill="rgba(232,160,58,0.2)" stroke="#e8a03a" stroke-width="2.2"/>
+<circle cx="290" cy="90" r="13" fill="#241c17" stroke="#8a7d70" stroke-width="1.3"/>
+<path d="M340 76 L354 90 L340 104 L326 90 Z" fill="#241c17" stroke="#5a5248" stroke-width="1.3" opacity="0.45"/>
+<path d="M390 76 L404 90 L390 104 L376 90 Z" fill="#241c17" stroke="#5a5248" stroke-width="1.3" opacity="0.45"/>
+<circle cx="450" cy="70" r="13" fill="#241c17" stroke="#5a5248" stroke-width="1.3" opacity="0.45"/>
+<circle cx="510" cy="90" r="17" fill="#241c17" stroke="#5a5248" stroke-width="1.3" opacity="0.45"/>
+<path d="M560 76 L574 90 L560 104 L546 90 Z" fill="#241c17" stroke="#5a5248" stroke-width="1.3" opacity="0.45"/>
+<circle cx="610" cy="90" r="22" fill="#241c17" stroke="#5a5248" stroke-width="1.3" opacity="0.45"/>
+</svg>
+<div style="position:absolute;top:0;left:0;width:100%;height:100%">
+<i class="ti ti-sword" style="position:absolute;left:223px;top:63px;font-size:13px;color:#f0c88a"></i>
+<i class="ti ti-sword" style="position:absolute;left:283px;top:83px;font-size:13px;color:#cfc4b8"></i>
+<i class="ti ti-building-store" style="position:absolute;left:333px;top:83px;font-size:13px;color:#5a5248"></i>
+<i class="ti ti-coin" style="position:absolute;left:383px;top:83px;font-size:13px;color:#5a5248"></i>
+<i class="ti ti-sword" style="position:absolute;left:443px;top:63px;font-size:13px;color:#5a5248"></i>
+<i class="ti ti-skull" style="position:absolute;left:501px;top:81px;font-size:17px;color:#5a5248"></i>
+<i class="ti ti-building-store" style="position:absolute;left:553px;top:83px;font-size:13px;color:#5a5248"></i>
+<i class="ti ti-crown" style="position:absolute;left:599px;top:78px;font-size:22px;color:#5a5248"></i>
+</div>
+</div>
+</div>
+
+<div style="display:flex; gap:12px; align-items:flex-start;">
+
+  <div style="flex:2; display:flex; flex-direction:column; gap:8px; min-width:0;">
+    <div style="background:rgba(0,0,0,0.24); border:0.5px solid rgba(237,227,211,0.12); border-radius:10px; padding:12px 14px;">
+      <div style="font-size:11px; color:#a89c88; margin-bottom:10px;">Team</div>
+      <div id="team-rows" style="display:flex; flex-direction:column; gap:12px;"></div>
+    </div>
+    <div id="message-area" style="min-height:34px; background:rgba(0,0,0,0.2); border:0.5px solid rgba(237,227,211,0.1); border-radius:8px; padding:8px 12px; font-size:12px; color:#a89c88; display:flex; align-items:center;">Hover a skill to see its details.</div>
+  </div>
+
+  <div style="flex:1; background:rgba(0,0,0,0.24); border:0.5px solid rgba(237,227,211,0.12); border-radius:10px; padding:12px 14px; min-width:0;">
+    <div style="font-size:11px; color:#a89c88; margin-bottom:10px;">Resources</div>
+    <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:16px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <i class="ti ti-sparkles" style="color:#f0c05a; font-size:16px;" aria-hidden="true"></i>
+        <div><div style="font-size:13px;">340</div><div style="font-size:10px; color:#a89c88;">Wisp</div></div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <i class="ti ti-diamond" style="color:#8ecae6; font-size:16px;" aria-hidden="true"></i>
+        <div><div style="font-size:13px;">2</div><div style="font-size:10px; color:#a89c88;">Echo Shards</div></div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <i class="ti ti-hexagon" style="color:#d8a3e0; font-size:16px;" aria-hidden="true"></i>
+        <div><div style="font-size:13px;">0</div><div style="font-size:10px; color:#a89c88;">Vessel Shards</div></div>
+      </div>
+    </div>
+
+    <div style="font-size:11px; color:#a89c88; margin-bottom:10px;">Artifacts (1 of 3)</div>
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="width:28px;height:28px;border-radius:6px;background:rgba(240,192,90,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i class="ti ti-flame" style="color:#f0c05a; font-size:15px;" aria-hidden="true"></i></div>
+        <div>
+          <div style="font-size:12px;">Twin Flame</div>
+          <div style="font-size:10px; color:#a89c88; line-height:1.3;">A lethal hit leaves this Anima at 1 HP instead, once per combat.</div>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; opacity:0.4;">
+        <div style="width:28px;height:28px;border-radius:6px;border:1px dashed rgba(237,227,211,0.25); flex-shrink:0;"></div>
+        <div style="font-size:11px; color:#a89c88;">Empty slot</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; opacity:0.4;">
+        <div style="width:28px;height:28px;border-radius:6px;border:1px dashed rgba(237,227,211,0.25); flex-shrink:0;"></div>
+        <div style="font-size:11px; color:#a89c88;">Empty slot</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</div>
+
+<script>
+const COLOR_HEX = { Crimson:'#c85a46', Onyx:'#8f8f96', Verdant:'#5fae6e' };
+const PART_ICON = { sword:'ti-sword', heart:'ti-heart', shield:'ti-shield', bolt:'ti-bolt' };
+
+const team = [
+  { name:'Ember', color:'Crimson', hp:'78/100', parts:[
+      { part:'Head', name:'Slash', icon:'sword', augs:['Increase Effect'], desc:'A quick strike to the front enemy.' },
+      { part:'Frame', name:'Charge', icon:'bolt', augs:[], desc:'Gain a stack of Charge, boosting the next Attack.' },
+      { part:'Tail', name:'Execute', icon:'sword', augs:['AoE Damage','Decrease Cost'], desc:'Heavy damage to the lowest-HP enemy.' },
+      { part:'Crest', name:'Reckless', icon:'bolt', augs:[], desc:'Passive: +10% damage dealt, +10% damage taken.' }
+  ]},
+  { name:'Boulder', color:'Onyx', hp:'130/130', parts:[
+      { part:'Head', name:'Bash', icon:'sword', augs:[], desc:'A heavy blow to the front enemy.' },
+      { part:'Frame', name:'Hardened', icon:'shield', augs:['Extend'], desc:'Grant Shield to self.' },
+      { part:'Tail', name:'Taunt', icon:'bolt', augs:[], desc:'Force enemies to target this Anima next Round.' },
+      { part:'Crest', name:'Courage', icon:'bolt', augs:['Increase Effect'], desc:'Passive: allies gain Shield when this Anima acts.' }
+  ]},
+  { name:'Sprout', color:'Verdant', hp:'92/100', parts:[
+      { part:'Head', name:'Smite', icon:'sword', augs:[], desc:'A blessed strike to the front enemy.' },
+      { part:'Frame', name:'Guiding Light', icon:'heart', augs:['Increase Effect','Decrease Cost'], desc:'Heal the lowest-HP ally.' },
+      { part:'Tail', name:'Lifebloom', icon:'heart', augs:[], desc:'Heal the whole team over time.' },
+      { part:'Crest', name:'Soul Link', icon:'diamond', augs:[], desc:'Passive: share a portion of healing received with allies.' }
+  ]}
+];
+
+const rowsEl = document.getElementById('team-rows');
+const msgEl = document.getElementById('message-area');
+
+team.forEach(anima => {
+  const hex = COLOR_HEX[anima.color];
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex; align-items:center; gap:12px; flex-wrap:wrap;';
+
+  const idHtml = `
+    <div style="width:30px;height:30px;border-radius:6px;background:${hex}33;border:1px solid ${hex};display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+      <i class="ti ti-flame" style="font-size:15px;color:${hex};" aria-hidden="true"></i>
+    </div>
+    <div style="width:78px; flex-shrink:0;">
+      <div style="font-size:12px;">${anima.name}</div>
+      <div style="font-size:10px; color:#a89c88;">${anima.hp} HP</div>
+    </div>
+  `;
+
+  let partsHtml = '<div style="display:flex; gap:6px;">';
+  anima.parts.forEach(p => {
+    const iconHtml = p.icon === 'diamond'
+      ? `<span style="display:inline-block;width:9px;height:9px;background:#e8a03a;transform:rotate(45deg);"></span>`
+      : `<i class="ti ${PART_ICON[p.icon]}" style="font-size:13px;color:#e8a03a;" aria-hidden="true"></i>`;
+    const badge = p.augs.length > 0
+      ? `<span style="position:absolute; top:-4px; right:-4px; width:12px; height:12px; border-radius:50%; background:#e8a03a; display:flex; align-items:center; justify-content:center;"><i class="ti ti-plus" style="font-size:8px; color:#2b2018;" aria-hidden="true"></i></span>`
+      : '';
+    partsHtml += `
+      <div class="skill-chip" data-desc="${p.name} (${p.part}) — ${p.desc}${p.augs.length ? ' Augments: ' + p.augs.join(', ') + '.' : ''}"
+        style="position:relative; display:flex; flex-direction:column; align-items:center; gap:2px; background:rgba(0,0,0,0.3); border:0.5px solid rgba(237,227,211,0.15); border-radius:6px; padding:5px 7px; cursor:pointer; min-width:50px;">
+        ${badge}
+        ${iconHtml}
+        <span style="font-size:9px; color:#c9bda8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:44px;">${p.name}</span>
+      </div>`;
+  });
+  partsHtml += '</div>';
+
+  row.innerHTML = idHtml + partsHtml;
+  rowsEl.appendChild(row);
+});
+
+rowsEl.addEventListener('mouseover', e => {
+  const chip = e.target.closest('.skill-chip');
+  if (chip) msgEl.textContent = chip.dataset.desc;
+});
+rowsEl.addEventListener('mouseout', e => {
+  const chip = e.target.closest('.skill-chip');
+  if (chip) msgEl.textContent = 'Hover a skill to see its details.';
+});
+</script>

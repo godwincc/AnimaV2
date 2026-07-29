@@ -50,7 +50,10 @@ public static class BossHatchService
     private static PartGenome RollPart(Part part, AnimaColor bodyColor, Random rng) =>
         new(RollOneSkill(part, bodyColor, rng), RollOneSkill(part, bodyColor, rng), RollOneSkill(part, bodyColor, rng));
 
-    private static Skill RollOneSkill(Part part, AnimaColor bodyColor, Random rng)
+    // Public (was private) as of the starter-trio feature -- StarterAnimaService reuses this exact
+    // 55/15/15/15-weighted single-skill roll for its own R1/R2 (its Dominant is NOT rolled, unlike
+    // here; see StarterAnimaService's own comment), rather than duplicating the weighting logic.
+    public static Skill RollOneSkill(Part part, AnimaColor bodyColor, Random rng)
     {
         var skillColor = RollPartColor(bodyColor, rng);
         return SkillPool.RollRandom(part, skillColor, rng);

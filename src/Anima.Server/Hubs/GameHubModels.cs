@@ -16,7 +16,15 @@ namespace Anima.Server.Hubs;
 // already set. AppliedAugments (NEW, same session) mirrors Skill.AppliedAugments (List<AugmentType>)
 // as ToString() names -- Count > 0 is the Delve map Team panel's "has augments" badge signal, the
 // full list is what the docked message area shows on hover/tap.
-public record AnimaPartSummary(string Part, string SkillName, string Category, bool GrantsShield, string Description, IReadOnlyList<string> AppliedAugments);
+// Color (NEW, Augment picker session) mirrors Skill.Color?.ToString() -- a real, confirmed gap
+// found while building the Augment picker: AugmentPendingEmber's own eligibility rule is "the
+// SKILL's own archetype color, not the Anima's body color" (this is what makes a hybrid Vulcan/
+// Mirage Anima's individually-colored parts work for free, no special-casing), but nothing on this
+// DTO exposed a per-part color before this -- the client had no way to determine which of a
+// team's parts match a given Ember's color at all. Null only for a skill with no Color set (Skill.
+// Color is nullable server-side; every real archetype skill in SampleArchetypes/SkillPool has one,
+// so this is a defensive null, not an expected real-data case).
+public record AnimaPartSummary(string Part, string SkillName, string Category, bool GrantsShield, string Description, IReadOnlyList<string> AppliedAugments, string? Color);
 
 public record AnimaSummary(
     string Id,
@@ -120,7 +128,14 @@ public record GetReforgeBrowseOptionsRequest(string Color);
 // GetReforgeValidTargets/AcceptReforge -- no synthetic id needed. Part is Skill.Part.ToString() --
 // which slot this pick would occupy is now fully determined by the skill itself, since there's no
 // separate "pick a slot" step anymore in the reordered flow.
-public record ReforgeSkillOption(string ArchetypeName, string SkillName, string Part, string Color);
+// Category/GrantsShield/Description (NEW, Reforge screen amendments session) mirror
+// AnimaPartSummary's own fields exactly, reusing GameHub's existing BuildSkillDescription helper --
+// the client's browse step needs to show what an unequipped skill actually DOES (icon + mechanical
+// text) before the player commits to it, the same way the roster already exposes that for equipped
+// skills. No new description text was invented: Skill has no flavor-text field of its own (confirmed
+// by reading Models.Skill), so this is the same synthesized-from-real-fields string
+// AnimaPartSummary.Description already uses, not new copy.
+public record ReforgeSkillOption(string ArchetypeName, string SkillName, string Part, string Color, string Category, bool GrantsShield, string Description);
 
 public record ReforgeValidTargetsRequest(string SkillName);
 
@@ -201,8 +216,11 @@ public record StarterAnimaConfirmResult(AnimaSummary Anima, IReadOnlyList<Starte
 public record CombatantRef(string Side, int Index);
 
 // Statuses is just the keyword list (e.g. ["Shield", "Weak"]) -- magnitude/duration/charges are
-// deliberately omitted from this first wire shape; add them if/when the real client build shows
-// it needs them (see CLAUDE.md's own "don't design for hypothetical requirements" guidance).
+// still deliberately omitted for every OTHER status (see CLAUDE.md's own "don't design for
+// hypothetical requirements" guidance) -- Shield is the one exception (Combat Screen Phase 4):
+// the hit-feedback animation's diff needs a real numeric Shield value to detect "Shield increased"
+// (vs. just "the Shield keyword is present/absent"), and no other status currently needs its
+// magnitude client-side, so this stays a single named field rather than a general magnitude map.
 public record CombatantSummary(
     string Side,
     int Index,
@@ -211,13 +229,17 @@ public record CombatantSummary(
     int MaxHp,
     int Position,
     bool Alive,
-    IReadOnlyList<string> Statuses);
+    IReadOnlyList<string> Statuses,
+    int Shield);
 
 // OwnerAnimaId is which of the 3 team Anima this card came from (Head/Frame/Tail) -- a real gap
 // found while building Phase 5a's own verification harness: CombatEngine.ResolvePlayerAction
 // rejects a card that isn't in the acting Anima's own DeckSkills, so a client has no way to know
 // which of Hand's cards are even legal to try for the CURRENT actor without this.
-public record HandCardSummary(int HandIndex, string OwnerAnimaId, string SkillName, string Category, string Color, int EnergyCost, string TargetType);
+// Description (NEW, Combat Phase 5) mirrors AnimaPartSummary/ReforgeSkillOption's own Description
+// field -- synthesized via the same BuildSkillDescription helper, closing the TODO #23(b) gap where
+// this DTO was the only skill-bearing one with no real effect text, only a client-side placeholder.
+public record HandCardSummary(int HandIndex, string OwnerAnimaId, string SkillName, string Category, string Color, int EnergyCost, string TargetType, string Description);
 
 public record CombatTurnEntry(string Side, int Index, string Name);
 
@@ -251,8 +273,12 @@ public record CombatStatus(
     WeaveGenomePreview? BossHatchPreview = null,
     DelveEndSummary? DefeatSummary = null);
 
-// HandIndex null = Pass. Target must be one of GetLegalTargets(HandIndex)'s entries, or null if
-// that set came back empty (SelfTarget/AllAllies/AllEnemies skills need no explicit target).
+// HandIndex null = Pass. Target must be one of GetLegalTargets(HandIndex)'s entries, or null only
+// if that set came back genuinely empty (AllAllies/AllEnemies skills need no explicit target).
+// CORRECTED (Combat Screen Phase 3/4 audit): SelfTarget does NOT fall into the "null is fine" case
+// above -- GetLegalTargets returns a non-empty [actor]-only list for SelfTarget, so an explicit
+// Target matching the actor IS required (confirmed live: a null Target for a SelfTarget skill was
+// rejected as an illegal target). Only AllAllies/AllEnemies genuinely return [] and accept null.
 public record SubmitActionRequest(string AnimaId, int? HandIndex, CombatantRef? Target);
 
 // ---- Combat rewards / Delve end (Phase 5b) ----

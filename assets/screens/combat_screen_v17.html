@@ -1,0 +1,298 @@
+<style>
+@keyframes floatUp { 0% { opacity:0; transform:translateY(0);} 15% { opacity:1; } 100% { opacity:0; transform:translateY(-28px);} }
+@keyframes flashDmg { 0% { background:rgba(226,75,74,0.55);} 100% { background:transparent;} }
+@keyframes flashHeal { 0% { background:rgba(95,174,110,0.55);} 100% { background:transparent;} }
+@keyframes flashShield { 0% { background:rgba(120,170,200,0.55);} 100% { background:transparent;} }
+</style>
+<div style="background: radial-gradient(ellipse at 50% 15%, #3a1f1e 0%, #221513 45%, #140d0b 100%); padding: 1rem; border-radius: 12px; font-family: var(--font-sans); color:#e8cf9a;">
+<h2 class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;">Combat screen with aligned position lines and a darker arena backdrop</h2>
+
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+  <div style="font-size:12px; color:#c9b89e;">Round 3 — Combat</div>
+  <div style="display:flex; align-items:center; gap:14px;">
+    <div style="display:flex; align-items:center; gap:4px; font-size:12px; color:#e8cf9a;"><i class="ti ti-sparkles" style="font-size:14px;color:#e8a03a;" aria-hidden="true"></i>240</div>
+    <div id="artifacts" style="display:flex; gap:5px;"></div>
+  </div>
+</div>
+
+<div style="background:rgba(0,0,0,0.42); border-radius:10px; padding:14px 10px; margin-bottom:14px;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+    <div id="player-row" style="display:flex; gap:10px;"></div>
+    <div id="enemy-row" style="display:flex; gap:10px;"></div>
+  </div>
+</div>
+
+<div style="border-top:1px solid rgba(201,184,158,0.15); padding-top:8px; margin-bottom:12px; min-height:34px;">
+  <div id="msgarea" style="font-size:11px; color:#e8cf9a; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">&nbsp;</div>
+</div>
+
+<div style="border-top:1px solid rgba(201,184,158,0.18); margin:4px 0 14px;"></div>
+
+<div style="display:flex; gap:16px; align-items:flex-start;">
+  <div style="flex-shrink:0; width:88px;">
+    <div style="font-size:9px; color:#8a7a6a; margin-bottom:5px;">This turn's order</div>
+    <div id="turnorder" style="display:flex; flex-direction:column; gap:4px;"></div>
+  </div>
+  <div style="flex:1;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <span style="font-size:11px; color:#c9b89e; margin-right:4px;">Energy</span>
+        <div id="energy" style="display:flex; gap:4px;"></div>
+      </div>
+      <button id="passbtn" style="font-size:11px; padding:5px 10px; background:transparent; border:1px solid rgba(201,184,158,0.35); color:#c9b89e; border-radius:6px; cursor:pointer;">Pass</button>
+    </div>
+    <div id="hand" style="display:flex; gap:8px; overflow-x:auto; padding-bottom:4px;"></div>
+  </div>
+</div>
+
+<div style="border-top:1px solid rgba(201,184,158,0.18); margin:14px 0 8px;"></div>
+<div style="display:flex; align-items:center; gap:5px; margin-bottom:5px;">
+  <i class="ti ti-scroll" style="font-size:12px;color:#8a7a6a;" aria-hidden="true"></i>
+  <span style="font-size:9px; color:#8a7a6a;">Combat log</span>
+</div>
+<div id="combatlog" style="display:flex; flex-direction:column; gap:2px; max-height:90px; overflow-y:auto; padding-right:4px;"></div>
+</div>
+
+<script>
+var COLOR_HEX = { Crimson:'#d9634a', Onyx:'#8f8f96', Verdant:'#5fae6e', Azure:'#5b9bd5' };
+var ACTIVE_COLOR = '#d4af37';
+
+var player = [
+  { id:'sprout', name:'Sprout', color:'Verdant', hp:100, maxHp:100, pos:3, side:'player', buffs:[] },
+  { id:'ember', name:'Ember', color:'Crimson', hp:22, maxHp:100, pos:2, side:'player', buffs:[{icon:'ti-flame',label:'Reckless',ticks:'Until consumed',desc:'Deals bonus damage but takes recoil on next hit.'}] },
+  { id:'boulder', name:'Boulder', color:'Onyx', hp:88, maxHp:130, pos:1, side:'player', buffs:[{icon:'ti-shield',label:'Fortify',ticks:'2 rounds left',desc:'+15 Shield at start of each Round.'}] }
+];
+var enemy = [
+  { id:'grovehide1', name:'Grovehide', hp:0, maxHp:70, pos:1, side:'enemy', dead:true },
+  { id:'grovehide2', name:'Grovehide', hp:70, maxHp:70, pos:2, side:'enemy', buffs:[] },
+  { id:'quillfang', name:'Quillfang', hp:45, maxHp:80, pos:3, side:'enemy', buffs:[
+      {icon:'ti-arrow-down',label:'Enfeeble',ticks:'1 round left',desc:'Deals 25% less damage.'},
+      {icon:'ti-flame',label:'Enrage',ticks:'x2, doubles next Round',desc:'Damage boosted, defense suppressed. Doubles each Round.'}
+  ] }
+];
+var order = [
+  {id:'quillfang',name:'Quillfang',side:'enemy'},
+  {id:'ember',name:'Ember',side:'player'},
+  {id:'sprout',name:'Sprout',side:'player'},
+  {id:'grovehide2',name:'Grovehide',side:'enemy'},
+  {id:'boulder',name:'Boulder',side:'player'}
+];
+var activeId = order[0].id;
+
+var toEl = document.getElementById('turnorder');
+order.forEach(function(o, i) {
+  var active = i === 0;
+  var c = document.createElement('div');
+  var borderColor = active ? ACTIVE_COLOR : (o.side === 'player' ? '#d4af37' : '#8a8175');
+  c.style.cssText = 'font-size:11px; padding:4px 6px; border-radius:5px; background:' + (active ? ACTIVE_COLOR + '22' : 'transparent') + '; border-left:2px solid ' + borderColor + '; color:' + (active ? '#f0e4d4' : '#c9b89e') + '; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+  c.textContent = o.name;
+  toEl.appendChild(c);
+});
+
+var msgEl = document.getElementById('msgarea');
+var stateHTML = '&nbsp;';
+function setState(html) { stateHTML = html; msgEl.innerHTML = html; }
+function bindHover(el, html) {
+  el.addEventListener('mouseenter', function() { msgEl.innerHTML = html; });
+  el.addEventListener('mouseleave', function() { msgEl.innerHTML = stateHTML; });
+}
+
+function buffRow(buffs) {
+  var html = '<div style="height:20px;display:flex;align-items:center;gap:3px;margin-top:4px;justify-content:center;">';
+  if (buffs && buffs.length) {
+    buffs.forEach(function(b) {
+      html += '<span class="buffchip" data-label="' + b.label + '" data-ticks="' + b.ticks + '" data-desc="' + b.desc + '" style="width:16px;height:16px;border-radius:4px;background:rgba(232,160,58,0.15);border:1px solid rgba(232,160,58,0.4);display:flex;align-items:center;justify-content:center;cursor:default;">';
+      html += '<i class="ti ' + b.icon + '" style="font-size:10px;color:#e8a03a;" aria-hidden="true"></i></span>';
+    });
+  }
+  html += '</div>';
+  return html;
+}
+
+function hpColor(pct) {
+  if (pct <= 25) return '#e24b4a';
+  if (pct <= 50) return '#d4af37';
+  return '#5fae6e';
+}
+
+var CONTENT_HEIGHT = 108;
+
+function renderCombatant(u) {
+  var isActive = u.id === activeId;
+  var lineColor = u.dead ? 'rgba(201,184,158,0.12)' : (isActive ? ACTIVE_COLOR : 'rgba(201,184,158,0.3)');
+  var lineNumColor = u.dead ? '#5a5248' : (isActive ? ACTIVE_COLOR : '#8a7a6a');
+  var content;
+  if (u.dead) {
+    content = '<div style="height:' + CONTENT_HEIGHT + 'px;"></div>';
+  } else {
+    var isEnemy = u.side === 'enemy';
+    var hex = isEnemy ? '#8a8175' : COLOR_HEX[u.color];
+    var pct = Math.round((u.hp / u.maxHp) * 100);
+    var barColor = hpColor(pct);
+    content = '<div style="height:' + CONTENT_HEIGHT + 'px;">';
+    content += '<div id="portrait-' + u.id + '" style="position:relative;overflow:hidden;width:76px;height:52px;border-radius:8px;background:' + hex + '22;border:1.5px solid ' + hex + ';display:flex;align-items:center;justify-content:center;color:' + hex + ';font-size:16px;">' + u.name[0] + '</div>';
+    content += '<div style="font-size:10px;color:#f0e4d4;text-align:center;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + u.name + '</div>';
+    content += '<div style="height:5px;border-radius:3px;background:rgba(0,0,0,0.4);margin-top:3px;overflow:hidden;"><div style="height:100%;width:' + pct + '%;background:' + barColor + ';"></div></div>';
+    content += '<div style="font-size:9px;color:#c9b89e;text-align:center;margin-top:1px;">' + u.hp + '/' + u.maxHp + '</div>';
+    content += buffRow(u.buffs);
+    content += '</div>';
+  }
+  var html = '<div data-unit="' + u.id + '" data-side="' + u.side + '" style="width:76px;">';
+  html += content;
+  html += '<div style="border-top:2px solid ' + lineColor + ';padding-top:3px;text-align:center;font-size:9px;color:' + lineNumColor + ';">' + u.pos + '</div>';
+  html += '</div>';
+  return html;
+}
+
+document.getElementById('player-row').innerHTML = player.map(renderCombatant).join('');
+document.getElementById('enemy-row').innerHTML = enemy.map(renderCombatant).join('');
+
+document.querySelectorAll('.buffchip').forEach(function(chip) {
+  bindHover(chip, '<b style="font-weight:500;color:#f0e4d4;">' + chip.dataset.label + '</b> (' + chip.dataset.ticks + ') — ' + chip.dataset.desc);
+});
+
+function fangIcon(color) {
+  return '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 1 L10 1 L7.5 11 L6 6 L4.5 11 Z" fill="' + color + '"/></svg>';
+}
+var artifactIcons = [
+  {name:'Twin Flame', custom:'ti-flame', desc:'Once per Delve: revive a fallen Anima at 30% HP.', spent:false},
+  {name:"Vanguard's Bell", custom:'ti-bell', desc:'+1 Energy on Round 1 of every Combat.', spent:false},
+  {name:'Withering Fang', custom:'fang', desc:'Executes the lowest-HP enemy to 1 HP if used before Combat. Spent.', spent:true}
+];
+var artEl = document.getElementById('artifacts');
+artifactIcons.forEach(function(a) {
+  var el = document.createElement('div');
+  el.style.cssText = 'width:22px;height:22px;border-radius:5px;background:rgba(232,160,58,' + (a.spent ? '0.04' : '0.12') + ');border:1px solid rgba(232,160,58,' + (a.spent ? '0.15' : '0.35') + ');display:flex;align-items:center;justify-content:center;position:relative;cursor:default;' + (a.spent ? 'opacity:0.5;' : '');
+  var iconColor = a.spent ? '#8a7a6a' : '#e8a03a';
+  var iconHtml = a.custom === 'fang' ? fangIcon(iconColor) : '<i class="ti ' + a.custom + '" style="font-size:12px;color:' + iconColor + ';" aria-hidden="true"></i>';
+  el.innerHTML = iconHtml + (a.spent ? '<div style="position:absolute;width:100%;height:1px;background:#8a7a6a;top:50%;left:0;transform:rotate(-20deg);"></div>' : '');
+  bindHover(el, '<b style="font-weight:500;color:#f0e4d4;">' + a.name + (a.spent ? ' (spent)' : '') + '</b> — ' + a.desc);
+  artEl.appendChild(el);
+});
+
+var energyEl = document.getElementById('energy');
+var energyMax = 6, energyCur = 5;
+for (var i = 0; i < energyMax; i++) {
+  var p = document.createElement('div');
+  p.style.cssText = 'width:12px;height:12px;border-radius:3px;background:' + (i < energyCur ? '#5b9bd5' : 'transparent') + ';border:1px solid ' + (i < energyCur ? '#5b9bd5' : 'rgba(201,184,158,0.3)') + ';';
+  energyEl.appendChild(p);
+}
+
+var logEl = document.getElementById('combatlog');
+var logEntries = [
+  { text: 'Quillfang used Pin on Ember (-8 HP)', kind:'damage' },
+  { text: 'Boulder played Fortify (+15 Shield)', kind:'shield' },
+  { text: "Grovehide used Bash on Boulder (-10 HP)", kind:'damage' },
+  { text: 'Ember played Slash on Quillfang (-18 HP)', kind:'damage' },
+  { text: "Quillfang's Enrage doubled to x2", kind:'neutral' },
+  { text: 'Round 3 begins — turn order rolled', kind:'neutral' },
+  { text: 'Sprout played Guiding Light on Boulder (+20 HP)', kind:'heal' },
+  { text: 'Round 2 begins — turn order rolled', kind:'neutral' }
+];
+var LOG_COLOR = { damage:'#d9847a', heal:'#8fbf9a', shield:'#8ab8d8', neutral:'#8a7a6a' };
+function renderLog() {
+  logEl.innerHTML = logEntries.map(function(l) {
+    return '<div style="font-size:10px;color:' + (LOG_COLOR[l.kind] || '#c9b89e') + ';">' + l.text + '</div>';
+  }).join('');
+}
+renderLog();
+
+var cards = [
+  { skill:'Bash', color:'Onyx', cost:1, effect:'Deal 12 dmg to front target', targetSide:'enemy', affordable:true, kind:'damage', value:12 },
+  { skill:'Slash', color:'Crimson', cost:2, effect:'Deal 18 dmg, +5 if target below 50% HP', targetSide:'enemy', affordable:true, kind:'damage', value:18 },
+  { skill:'Guiding Light', color:'Verdant', cost:2, effect:'Heal target for 20 HP', targetSide:'ally', affordable:false, kind:'heal', value:20 },
+  { skill:'Fortify', color:'Onyx', cost:1, effect:'Grant self 15 Shield', targetSide:'self', affordable:true, kind:'shield', value:15 },
+  { skill:'Execute', color:'Crimson', cost:4, effect:'Deal 30 dmg, execute below 20% HP', targetSide:'enemy', affordable:false, kind:'damage', value:30 }
+];
+var handEl = document.getElementById('hand');
+cards.forEach(function(c) {
+  var hex = COLOR_HEX[c.color];
+  var card = document.createElement('div');
+  card.dataset.targetSide = c.targetSide;
+  card.dataset.skill = c.skill;
+  card.dataset.affordable = c.affordable;
+  card.dataset.kind = c.kind;
+  card.dataset.value = c.value;
+  card.style.cssText = 'width:88px;flex-shrink:0;background:rgba(20,15,10,0.7);border:1px solid ' + hex + '66;border-radius:8px;padding:6px;cursor:' + (c.affordable ? 'pointer' : 'default') + ';display:flex;flex-direction:column;gap:4px;position:relative;' + (c.affordable ? '' : 'opacity:0.45;');
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;">';
+  html += '<span style="width:16px;height:16px;border-radius:50%;background:' + hex + ';color:#1a130e;font-size:10px;font-weight:500;display:flex;align-items:center;justify-content:center;">' + c.cost + '</span>';
+  html += '<i class="ti ti-sword" style="font-size:12px;color:' + hex + ';" aria-hidden="true"></i></div>';
+  html += '<div style="width:100%;height:44px;border-radius:5px;background:' + hex + '18;"></div>';
+  html += '<div style="font-size:11px;color:#f0e4d4;font-weight:500;">' + c.skill + '</div>';
+  html += '<div style="font-size:9px;color:#c9b89e;line-height:1.3;">' + c.effect + '</div>';
+  if (!c.affordable) {
+    html += '<div style="position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;"><i class="ti ti-x" style="font-size:26px;color:#e24b4a;" aria-hidden="true"></i></div>';
+  }
+  card.innerHTML = html;
+  handEl.appendChild(card);
+});
+
+var pendingCard = null;
+
+function clearState() {
+  setState('&nbsp;');
+  document.querySelectorAll('[data-unit]').forEach(function(u) { u.style.outline = 'none'; });
+  pendingCard = null;
+}
+
+function spawnFeedback(unitId, kind, value) {
+  var portrait = document.getElementById('portrait-' + unitId);
+  if (!portrait) return;
+  var flashAnim = kind === 'heal' ? 'flashHeal' : (kind === 'shield' ? 'flashShield' : 'flashDmg');
+  var textColor = kind === 'heal' ? '#5fae6e' : (kind === 'shield' ? '#8ab8d8' : '#e24b4a');
+  var prefix = kind === 'damage' ? '-' : '+';
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;border-radius:8px;animation:' + flashAnim + ' 0.6s ease-out;';
+  portrait.appendChild(overlay);
+  var num = document.createElement('div');
+  num.textContent = prefix + value;
+  num.style.cssText = 'position:absolute;top:-4px;left:50%;transform:translateX(-50%);font-size:13px;font-weight:500;color:' + textColor + ';animation:floatUp 0.9s ease-out forwards;pointer-events:none;';
+  portrait.appendChild(num);
+  setTimeout(function() { overlay.remove(); num.remove(); }, 900);
+}
+
+function showConfirm(skillName, targetId, targetLabel) {
+  var html = 'Play <b style="font-weight:500;color:#f0e4d4;">' + skillName + '</b> on ' + targetLabel + '? ' +
+    '<button id="confirmbtn" style="font-size:11px;padding:3px 8px;background:rgba(95,174,110,0.15);border:1px solid #5fae6e;color:#5fae6e;border-radius:5px;cursor:pointer;">Confirm</button>' +
+    '<button id="cancelbtn" style="font-size:11px;padding:3px 8px;background:transparent;border:1px solid rgba(201,184,158,0.35);color:#c9b89e;border-radius:5px;cursor:pointer;">Cancel</button>';
+  setState(html);
+  document.getElementById('confirmbtn').addEventListener('click', function() {
+    spawnFeedback(targetId, pendingCard.dataset.kind, pendingCard.dataset.value);
+    var prefix = pendingCard.dataset.kind === 'damage' ? '-' : '+';
+    logEntries.unshift({ text: 'You played ' + pendingCard.dataset.skill + ' on ' + targetLabel + ' (' + prefix + pendingCard.dataset.value + ')', kind: pendingCard.dataset.kind });
+    renderLog();
+    sendPrompt('Play ' + pendingCard.dataset.skill + (targetId === activeId && pendingCard.dataset.targetSide === 'self' ? '' : ' targeting ' + targetId));
+    clearState();
+  });
+  document.getElementById('cancelbtn').addEventListener('click', clearState);
+}
+
+handEl.addEventListener('click', function(e) {
+  var card = e.target.closest('div[data-skill]');
+  if (!card || card.dataset.affordable === 'false') return;
+  var ts = card.dataset.targetSide;
+  if (ts === 'self') {
+    pendingCard = card;
+    showConfirm(card.dataset.skill, activeId, 'self');
+    return;
+  }
+  pendingCard = card;
+  setState('Choose a ' + ts + ' target for <b style="font-weight:500;color:#f0e4d4;">' + card.dataset.skill + '</b>');
+  document.querySelectorAll('[data-unit]').forEach(function(u) {
+    if (u.dataset.side === ts) u.style.outline = '2px solid #e8a03a';
+  });
+});
+
+document.body.addEventListener('click', function(e) {
+  var unit = e.target.closest('[data-unit]');
+  if (unit && pendingCard && unit.style.outline && unit.style.outline !== 'none') {
+    document.querySelectorAll('[data-unit]').forEach(function(u) { u.style.outline = 'none'; });
+    showConfirm(pendingCard.dataset.skill, unit.dataset.unit, unit.dataset.unit);
+  }
+});
+document.getElementById('passbtn').addEventListener('click', function() {
+  logEntries.unshift({ text: 'You passed this Anima\u2019s turn', kind: 'neutral' });
+  renderLog();
+  sendPrompt('Pass this Anima turn');
+});
+</script>

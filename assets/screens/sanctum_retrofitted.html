@@ -1,0 +1,32 @@
+<h2 class="sr-only">Sanctum roster grid retrofitted to the warm theme with parts list per card</h2>
+<div style="border-radius:16px;padding:18px;background:radial-gradient(ellipse at 30% 20%, #4a3a2e 0%, #2b2018 45%, #1a130e 100%)">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+<p style="font-size:16px;font-weight:500;margin:0;color:#f0e4d4">Sanctum</p>
+<p style="font-size:12px;color:#a89680;margin:0">6 animas</p>
+</div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px" id="grid"></div>
+</div>
+<script>
+const roster = [
+{name:"Ember",color:"#c4423a",colorName:"Crimson",gen:1,weave:2,inTeam:true,parts:[{n:"Slash",icon:"ti-sword"},{n:"Charge",icon:"ti-bolt"},{n:"Execute",icon:"ti-sword"},{n:"Reckless",icon:"ti-diamond"}]},
+{name:"Boulder",color:"#555",colorName:"Onyx",gen:1,weave:1,inTeam:true,parts:[{n:"Bash",icon:"ti-sword"},{n:"Hardened",icon:"ti-shield"},{n:"Taunt",icon:"ti-bolt"},{n:"Courage",icon:"ti-diamond"}]},
+{name:"Sprout",color:"#3a8c4a",colorName:"Verdant",gen:1,weave:0,inTeam:true,parts:[{n:"Smite",icon:"ti-sword"},{n:"Guiding light",icon:"ti-heart"},{n:"Lifebloom",icon:"ti-heart"},{n:"Soul link",icon:"ti-diamond"}]},
+{name:"Ashfang",color:"#c4423a",colorName:"Crimson",gen:2,weave:0,inTeam:false,parts:[{n:"Rend",icon:"ti-sword"},{n:"Lunge",icon:"ti-sword"},{n:"Execute",icon:"ti-sword"},{n:"Reckless",icon:"ti-diamond"}]},
+{name:"Thistle",color:"#3a6fc4",colorName:"Azure",gen:2,weave:1,inTeam:false,parts:[{n:"Pin",icon:"ti-bolt"},{n:"Exploit",icon:"ti-sword"},{n:"Misdirect",icon:"ti-bolt"},{n:"Ambush",icon:"ti-diamond"}]},
+{name:"Dustwing",color:"#8a4a3a",colorName:"Vulcan",gen:3,weave:0,inTeam:false,parts:[{n:"Bash",icon:"ti-sword"},{n:"Charge",icon:"ti-bolt"},{n:"Execute",icon:"ti-sword"},{n:"Courage",icon:"ti-diamond"}]}
+];
+const iconColor = {"ti-sword":"#e0736a","ti-shield":"#7aa8d8","ti-heart":"#6cb87c","ti-bolt":"#e8b95a","ti-diamond":"#e8a03a"};
+document.getElementById('grid').innerHTML = roster.map(a=>`
+<div style="cursor:pointer;background:rgba(30,22,16,0.75);border-radius:12px;padding:10px;border:${a.inTeam?'2px solid #e8a03a':'1px solid rgba(201,184,158,0.2)'};position:relative">
+${a.inTeam?'<div style="position:absolute;top:8px;right:8px;background:#e8a03a;color:#2b2018;font-size:9px;padding:2px 7px;border-radius:20px;font-weight:500">In team</div>':''}
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+<div style="width:36px;height:36px;border-radius:8px;background:${a.color};display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-photo" style="font-size:16px;color:rgba(255,255,255,0.55)"></i></div>
+<div><p style="font-size:12px;font-weight:500;margin:0;color:#f0e4d4">${a.name}</p><p style="font-size:9px;color:#a89680;margin:1px 0 0">${a.colorName}, Gen ${a.gen}</p></div>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px;margin-bottom:6px">
+${a.parts.map(p=>`<div style="display:flex;align-items:center;gap:4px"><i class="ti ${p.icon}" style="font-size:9px;color:${iconColor[p.icon]}"></i><span style="font-size:9px;color:#a89680">${p.n}</span></div>`).join('')}
+</div>
+<div style="display:flex;justify-content:space-between;font-size:9px;color:#a89680;margin-bottom:2px"><span>Weave</span><span>${a.weave}/5</span></div>
+<div style="width:100%;height:5px;background:rgba(0,0,0,0.4);border-radius:3px;overflow:hidden"><div style="width:${a.weave/5*100}%;height:100%;background:linear-gradient(90deg,#c9862f,#e8a03a)"></div></div>
+</div>`).join('');
+</script>

@@ -16,9 +16,16 @@ public static class GenomeFactory
 {
     // Single entry point for "give me this roster Anima's AnimaGenome so it can be a Weave
     // parent." Anima.HeadR1 being null is the reliable signal for "founder with no recorded
-    // genome" (see Models.Anima's own comment) -- every Weave-produced or Boss-hatch Anima has
-    // real HeadR1/HeadR2/etc. from AnimaMaterializationService.Build, and the starter trio (the
-    // only Anima with none) is exactly what CreateFounderGenome's placeholder exists to cover.
+    // genome" (see Models.Anima's own comment) -- every Weave-produced, Boss-hatch, OR (as of the
+    // starter-trio feature) real starter Anima has real HeadR1/HeadR2/etc. from
+    // AnimaMaterializationService.Build. **No longer reachable via any real roster path**: this
+    // fallback used to also cover the starter trio, back when it was 3 hardcoded, never-materialized
+    // SampleAnimas instances (Ember/Boulder/Sprout) seeded with no recorded genome at all. Now that
+    // real starter Anima are rolled (StarterAnimaService.RollStarterTrio) and go through Build just
+    // like a Weave/Boss-hatch, CreateFounderGenome's placeholder is exercised only by test/harness
+    // code that constructs a bare SampleAnimas.CreateX() instance directly (e.g. the console
+    // harness's own Weaving distribution checks) -- never by anything a real player's roster
+    // contains.
     public static AnimaGenome CreateGenome(AnimaUnit anima) =>
         anima.HeadR1 is not null ? ExtractGenome(anima) : CreateFounderGenome(anima);
 

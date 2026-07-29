@@ -1,0 +1,149 @@
+<div style="background:var(--surface-1); border-radius:12px; padding:1.25rem; max-width:420px; margin:0 auto;">
+<h2 class="sr-only">Mockup of the Reforge room screen with a hammer icon: choose to Reforge or Leave, pick an Aspect, pick a skill, pick a team Anima, then confirm the swap or see an insufficient Wisp error.</h2>
+<div style="border-radius:10px; overflow:hidden; min-height:420px; display:flex; flex-direction:column; background:radial-gradient(ellipse at 30% 20%, #4a3a2e 0%, #2b2018 45%, #1a130e 100%); color:#e8cf9a; font-family:var(--font-sans);">
+
+<div style="padding:10px 14px; font-size:12px; letter-spacing:.02em; color:#c9b89e; border-bottom:0.5px solid rgba(201,184,158,0.2); display:flex; justify-content:space-between; align-items:center;">
+<span style="display:flex; align-items:center; gap:6px;"><i class="ti ti-hammer" style="font-size:14px; color:#e8a03a;" aria-hidden="true"></i><span id="step-label">Reforge</span></span>
+<span>Wisp: <span id="wisp-display">65</span></span>
+</div>
+
+<div style="flex:1; padding:20px 16px; display:flex; flex-direction:column; gap:12px;" id="screen-body"></div>
+</div>
+</div>
+
+<script>
+const state = { aspect: null, skill: null, anima: null, wisp: 65 };
+const aspects = [
+  { name: "Crimson", hex: "#c0503a" },
+  { name: "Onyx", hex: "#8a8175" },
+  { name: "Verdant", hex: "#6fae5e" },
+  { name: "Azure", hex: "#5a9ac0" }
+];
+const skillsByAspect = {
+  Crimson: [{ part: "Head", name: "Slash" }, { part: "Frame", name: "Rend" }, { part: "Tail", name: "Snipe" }],
+  Onyx: [{ part: "Head", name: "Bash" }, { part: "Frame", name: "Guard Strike" }, { part: "Tail", name: "Intercept" }],
+  Verdant: [{ part: "Head", name: "Smite" }, { part: "Frame", name: "Renew" }, { part: "Tail", name: "Purge" }],
+  Azure: [{ part: "Head", name: "Pin" }, { part: "Frame", name: "Shove" }, { part: "Tail", name: "Deflect" }]
+};
+const team = [
+  { name: "Boulder", aspect: "Onyx", head: "Bash" },
+  { name: "Sprout", aspect: "Verdant", frame: "Healing Rain" },
+  { name: "Ember", aspect: "Crimson", tail: "Steady Aim" }
+];
+
+function btn(labelText, onClick, primary) {
+  const b = document.createElement("button");
+  b.textContent = labelText;
+  b.style.cssText = "text-align:left; padding:10px 12px; border-radius:8px; font-size:14px; cursor:pointer; background:" + (primary ? "#e8a03a" : "rgba(30,22,16,0.55)") + "; color:" + (primary ? "#2b2018" : "#e8cf9a") + "; border:0.5px solid rgba(201,184,158,0.25);";
+  b.onclick = onClick;
+  return b;
+}
+function label(text, size, color) {
+  const p = document.createElement("p");
+  p.textContent = text;
+  p.style.cssText = "margin:0; font-size:" + (size || 14) + "px; color:" + (color || "#c9b89e") + ";";
+  return p;
+}
+function body() { return document.getElementById("screen-body"); }
+function setStepLabel(t) { document.getElementById("step-label").textContent = t; }
+function clearBody() { body().innerHTML = ""; }
+
+function renderStart() {
+  setStepLabel("Reforge");
+  clearBody();
+  const iconWrap = document.createElement("div");
+  iconWrap.style.cssText = "display:flex; justify-content:center; padding:18px 0 6px;";
+  iconWrap.innerHTML = '<i class="ti ti-hammer" style="font-size:48px; color:#e8a03a;" aria-hidden="true"></i>';
+  body().appendChild(iconWrap);
+  body().appendChild(label("A quiet font of shifting threads.", 15, "#f0e4d4"));
+  body().appendChild(label("Swap one skill on your team for another, drawn from any Aspect.", 13));
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex; flex-direction:column; gap:8px; margin-top:auto;";
+  row.appendChild(btn("Begin Reforge", renderAspect, true));
+  row.appendChild(btn("Leave", renderStart));
+  body().appendChild(row);
+}
+
+function renderAspect() {
+  setStepLabel("Reforge — pick an Aspect");
+  clearBody();
+  body().appendChild(label("Which Aspect's skills do you want to draw from?", 14));
+  const grid = document.createElement("div");
+  grid.style.cssText = "display:grid; grid-template-columns:1fr 1fr; gap:8px;";
+  aspects.forEach(c => {
+    const b = document.createElement("button");
+    b.style.cssText = "padding:14px; border-radius:8px; border:0.5px solid rgba(201,184,158,0.25); cursor:pointer; background:rgba(30,22,16,0.55); display:flex; align-items:center; gap:8px; font-size:14px; color:#f0e4d4;";
+    b.innerHTML = '<span style="width:14px;height:14px;border-radius:50%;background:' + c.hex + ';display:inline-block;"></span>' + c.name;
+    b.onclick = () => { state.aspect = c.name; renderSkill(); };
+    grid.appendChild(b);
+  });
+  body().appendChild(grid);
+  body().appendChild(btn("Back", renderStart));
+}
+
+function renderSkill() {
+  setStepLabel("Reforge — pick a skill (" + state.aspect + ")");
+  clearBody();
+  body().appendChild(label("Excludes skills your team already has equipped in that slot.", 12));
+  const list = document.createElement("div");
+  list.style.cssText = "display:flex; flex-direction:column; gap:6px;";
+  skillsByAspect[state.aspect].forEach(s => {
+    const b = document.createElement("button");
+    b.style.cssText = "padding:10px 12px; border-radius:8px; border:0.5px solid rgba(201,184,158,0.25); cursor:pointer; background:rgba(30,22,16,0.55); display:flex; justify-content:space-between; font-size:14px; color:#f0e4d4;";
+    b.innerHTML = "<span>" + s.name + "</span><span style='color:#c9b89e; font-size:12px;'>" + s.part + "</span>";
+    b.onclick = () => { state.skill = s; renderAnima(); };
+    list.appendChild(b);
+  });
+  body().appendChild(list);
+  body().appendChild(btn("Back", renderAspect));
+}
+
+function renderAnima() {
+  setStepLabel("Reforge — pick an Anima");
+  clearBody();
+  body().appendChild(label("Which Anima gets the new " + state.skill.name + " (" + state.skill.part + ")?", 14));
+  const list = document.createElement("div");
+  list.style.cssText = "display:flex; flex-direction:column; gap:6px;";
+  team.forEach(a => {
+    const current = a[state.skill.part.toLowerCase()] || "—";
+    const b = document.createElement("button");
+    b.style.cssText = "padding:10px 12px; border-radius:8px; border:0.5px solid rgba(201,184,158,0.25); cursor:pointer; background:rgba(30,22,16,0.55); display:flex; justify-content:space-between; font-size:14px; color:#f0e4d4;";
+    b.innerHTML = "<span>" + a.name + " <span style='color:#c9b89e; font-size:12px;'>(" + a.aspect + ")</span></span><span style='color:#c9b89e; font-size:12px;'>has: " + current + "</span>";
+    b.onclick = () => { state.anima = a; renderConfirm(); };
+    list.appendChild(b);
+  });
+  body().appendChild(list);
+  body().appendChild(btn("Back", renderSkill));
+}
+
+function renderConfirm() {
+  setStepLabel("Reforge — confirm");
+  clearBody();
+  const cost = state.anima.aspect === state.aspect ? 40 : 80;
+  const current = state.anima[state.skill.part.toLowerCase()] || "—";
+  body().appendChild(label(state.anima.name + "'s " + state.skill.part + " slot", 13));
+  body().appendChild(label(current + "  →  " + state.skill.name, 16, "#f0e4d4"));
+  body().appendChild(label("Cost: " + cost + " Wisp (" + (state.anima.aspect === state.aspect ? "same Aspect as " + state.anima.name : "cross-Aspect") + ")", 13));
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex; flex-direction:column; gap:8px; margin-top:auto;";
+  row.appendChild(btn("Accept", () => {
+    if (state.wisp < cost) { renderError(cost); } else {
+      state.wisp -= cost;
+      document.getElementById("wisp-display").textContent = state.wisp;
+      renderStart();
+    }
+  }, true));
+  row.appendChild(btn("Decline", renderStart));
+  body().appendChild(row);
+}
+
+function renderError(cost) {
+  setStepLabel("Reforge — not enough Wisp");
+  clearBody();
+  body().appendChild(label("Not enough Wisp for that swap.", 15, "#e8a03a"));
+  body().appendChild(label("Needed " + cost + ", have " + state.wisp + ".", 13));
+  body().appendChild(btn("Back to Reforge", renderStart, true));
+}
+
+renderStart();
+</script>
