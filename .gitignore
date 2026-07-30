@@ -98,6 +98,11 @@ StyleCopReport.xml
 client/.godot/
 client/builds/
 
+# Local dev-server run logs (redirected dotnet run / node serve.js output, *.log doesn't match
+# the .txt extension these happen to use)
+.serve_log.txt
+.server_log.txt
+
 *.tli
 *.tlh
 *.tmp
